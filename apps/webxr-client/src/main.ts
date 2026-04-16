@@ -315,6 +315,7 @@ function applySnapshot(snapshot: SceneSnapshot, label: string) {
 
   boardScene.applySnapshot(snapshot, {
     terrainChanged: update.terrainChanged,
+    objectsChanged: update.objectsChanged,
   });
   boardScene.updateActors(worldState.getInterpolatedActors());
   snapshotStatus!.textContent = label;

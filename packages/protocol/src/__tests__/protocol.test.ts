@@ -70,4 +70,28 @@ describe('protocol fixtures', () => {
 		expect(parsed.tiles[0]?.surface?.overlayId).toBe(5);
 		expect(parsed.tiles[0]?.surface?.model?.faces[0]?.rgb).toBe(0x3366cc);
 	});
+
+	it('accepts optional scene object footprint and wall metadata', () => {
+		const parsed = parseSceneSnapshot({
+			...sampleSceneSnapshot,
+			objects: [
+				{
+					...sampleSceneSnapshot.objects[0],
+					sizeX: 2,
+					sizeY: 3,
+					rotationDegrees: 270,
+				},
+				{
+					...sampleSceneSnapshot.objects[1],
+					wallOrientationA: 1,
+					wallOrientationB: 8,
+				},
+				...sampleSceneSnapshot.objects.slice(2),
+			],
+		});
+
+		expect(parsed.objects[0]?.sizeX).toBe(2);
+		expect(parsed.objects[0]?.rotationDegrees).toBe(270);
+		expect(parsed.objects[1]?.wallOrientationB).toBe(8);
+	});
 });

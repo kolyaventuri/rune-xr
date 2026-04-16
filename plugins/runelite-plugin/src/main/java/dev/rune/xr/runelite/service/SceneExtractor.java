@@ -21,11 +21,13 @@ import net.runelite.api.GameObject;
 import net.runelite.api.GroundObject;
 import net.runelite.api.JagexColor;
 import net.runelite.api.NPC;
+import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Scene;
 import net.runelite.api.SceneTileModel;
 import net.runelite.api.SceneTilePaint;
 import net.runelite.api.Tile;
+import net.runelite.api.TileObject;
 import net.runelite.api.WallObject;
 import net.runelite.api.coords.WorldPoint;
 
@@ -163,14 +165,14 @@ public final class SceneExtractor
                     continue;
                 }
 
-                appendTileObjects(objects, tile, point, plane);
+                appendTileObjects(objects, tile, plane);
             }
         }
 
         return objects;
     }
 
-    private void appendTileObjects(List<SceneObjectPayload> objects, Tile tile, WorldPoint point, int plane)
+    private void appendTileObjects(List<SceneObjectPayload> objects, Tile tile, int plane)
     {
         WallObject wall = tile.getWallObject();
         DecorativeObject decor = tile.getDecorativeObject();
@@ -178,19 +180,20 @@ public final class SceneExtractor
 
         if (wall != null)
         {
-            objects.add(new SceneObjectPayload("wall_" + wall.getId(), "wall", "Wall object", point.getX(), point.getY(), plane));
+            objects.add(buildWallPayload(wall, plane));
         }
 
         if (decor != null)
         {
-            objects.add(new SceneObjectPayload("decor_" + decor.getId(), "decor", "Decorative object", point.getX(), point.getY(), plane));
+            objects.add(buildTileObjectPayload("decor", decor, plane, 0, null, null));
         }
 
         if (ground != null)
         {
-            objects.add(new SceneObjectPayload("ground_" + ground.getId(), "ground", "Ground object", point.getX(), point.getY(), plane));
+            objects.add(buildTileObjectPayload("ground", ground, plane, 0, null, null));
         }
 
+        int gameIndex = 0;
         for (GameObject gameObject : tile.getGameObjects())
         {
             if (gameObject == null)
@@ -198,8 +201,159 @@ public final class SceneExtractor
                 continue;
             }
 
-            objects.add(new SceneObjectPayload("game_" + gameObject.getId(), "game", "Game object", point.getX(), point.getY(), plane));
+            objects.add(buildGameObjectPayload(gameObject, plane, gameIndex));
+            gameIndex += 1;
         }
+    }
+
+    private SceneObjectPayload buildWallPayload(WallObject wall, int plane)
+    {
+        Integer wallOrientationA = normalizeWallOrientation(wall.getOrientationA());
+        Integer wallOrientationB = normalizeWallOrientation(wall.getOrientationB());
+        return buildTileObjectPayload("wall", wall, plane, 0, wallOrientationA, wallOrientationB);
+    }
+
+    private SceneObjectPayload buildGameObjectPayload(GameObject gameObject, int plane, int gameIndex)
+    {
+        ObjectComposition composition = resolveObjectComposition(gameObject.getId());
+        WorldPoint point = gameObject.getWorldLocation();
+        return new SceneObjectPayload(
+            buildInstanceId("game", gameObject, point, plane, gameIndex),
+            "game",
+            resolveObjectName("Game object", composition),
+            point.getX(),
+            point.getY(),
+            plane,
+            gameObject.sizeX(),
+            gameObject.sizeY(),
+            normalizeGameObjectRotationDegrees(gameObject.getOrientation()),
+            null,
+            null
+        );
+    }
+
+    private SceneObjectPayload buildTileObjectPayload(
+        String kind,
+        TileObject object,
+        int plane,
+        int variantIndex,
+        Integer wallOrientationA,
+        Integer wallOrientationB
+    )
+    {
+        ObjectComposition composition = resolveObjectComposition(object.getId());
+        WorldPoint point = object.getWorldLocation();
+        Integer sizeX = composition == null ? null : composition.getSizeX();
+        Integer sizeY = composition == null ? null : composition.getSizeY();
+
+        return new SceneObjectPayload(
+            buildInstanceId(kind, object, point, plane, variantIndex),
+            kind,
+            resolveObjectName(defaultObjectName(kind), composition),
+            point.getX(),
+            point.getY(),
+            plane,
+            normalizePositiveSize(sizeX),
+            normalizePositiveSize(sizeY),
+            null,
+            wallOrientationA,
+            wallOrientationB
+        );
+    }
+
+    private String buildInstanceId(String kind, TileObject object, WorldPoint point, int plane, int variantIndex)
+    {
+        return kind
+            + "_"
+            + object.getId()
+            + "_"
+            + point.getX()
+            + "_"
+            + point.getY()
+            + "_"
+            + plane
+            + "_"
+            + variantIndex
+            + "_"
+            + Long.toUnsignedString(object.getHash());
+    }
+
+    private ObjectComposition resolveObjectComposition(int objectId)
+    {
+        ObjectComposition composition = client.getObjectDefinition(objectId);
+
+        if (composition == null)
+        {
+            return null;
+        }
+
+        if (composition.getImpostorIds() == null)
+        {
+            return composition;
+        }
+
+        ObjectComposition impostor = composition.getImpostor();
+        return impostor == null ? composition : impostor;
+    }
+
+    private String resolveObjectName(String fallback, ObjectComposition composition)
+    {
+        if (composition == null)
+        {
+            return fallback;
+        }
+
+        String name = composition.getName();
+        if (name == null || name.isBlank() || "null".equalsIgnoreCase(name))
+        {
+            return fallback;
+        }
+
+        return name;
+    }
+
+    private String defaultObjectName(String kind)
+    {
+        return switch (kind)
+        {
+            case "wall" -> "Wall object";
+            case "decor" -> "Decorative object";
+            case "ground" -> "Ground object";
+            default -> "Game object";
+        };
+    }
+
+    static Integer normalizeGameObjectRotationDegrees(int orientation)
+    {
+        return normalizeQuarterTurnDegrees(Math.round((float) orientation / 512F));
+    }
+
+    static Integer normalizeQuarterTurnDegrees(int quarterTurns)
+    {
+        int normalized = Math.floorMod(quarterTurns, 4);
+        return switch (normalized)
+        {
+            case 0 -> 0;
+            case 1 -> 90;
+            case 2 -> 180;
+            default -> 270;
+        };
+    }
+
+    static Integer normalizeWallOrientation(int orientation)
+    {
+        int normalized = orientation & 0xff;
+        return normalized == 0 ? null : normalized;
+    }
+
+    private static Integer normalizePositiveSize(Integer size)
+    {
+        if (size == null || size <= 0)
+        {
+            return null;
+        }
+
+        return size;
     }
 
     private void addActorPayload(List<ActorPayload> actors, Actor actor, String type, int plane, boolean preferName)

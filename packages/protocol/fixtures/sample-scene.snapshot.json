@@ -61,9 +61,12 @@
     { "id": "player_friend", "type": "player", "name": "Friend", "x": 3202, "y": 3191, "plane": 0 }
   ],
   "objects": [
-    { "id": "tree_1", "kind": "game", "name": "Tree", "x": 3201, "y": 3194, "plane": 0 },
-    { "id": "wall_1", "kind": "wall", "name": "Wall", "x": 3204, "y": 3190, "plane": 0 },
-    { "id": "banner_1", "kind": "decor", "name": "Banner", "x": 3206, "y": 3193, "plane": 0 }
+    { "id": "game_tree_3201_3194_0_0", "kind": "game", "name": "Tree", "x": 3201, "y": 3194, "plane": 0, "sizeX": 1, "sizeY": 1 },
+    { "id": "wall_house_sw", "kind": "wall", "name": "Stone wall", "x": 3203, "y": 3192, "plane": 0, "wallOrientationA": 1, "wallOrientationB": 8 },
+    { "id": "wall_house_nw", "kind": "wall", "name": "Stone wall", "x": 3203, "y": 3193, "plane": 0, "wallOrientationA": 1, "wallOrientationB": 2 },
+    { "id": "wall_house_se", "kind": "wall", "name": "Stone wall", "x": 3204, "y": 3192, "plane": 0, "wallOrientationA": 4, "wallOrientationB": 8 },
+    { "id": "wall_house_ne", "kind": "wall", "name": "Stone wall", "x": 3204, "y": 3193, "plane": 0, "wallOrientationA": 4, "wallOrientationB": 2 },
+    { "id": "game_stall_3205_3191_0_0", "kind": "game", "name": "Market stall", "x": 3205, "y": 3191, "plane": 0, "sizeX": 2, "sizeY": 1, "rotationDegrees": 90 },
+    { "id": "banner_1", "kind": "decor", "name": "Banner", "x": 3206, "y": 3193, "plane": 0, "rotationDegrees": 180 }
   ]
 }
-

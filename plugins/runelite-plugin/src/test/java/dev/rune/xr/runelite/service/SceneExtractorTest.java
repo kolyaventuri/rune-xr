@@ -39,6 +39,24 @@ class SceneExtractorTest
     }
 
     @Test
+    void normalizesObjectRotationToQuarterTurns()
+    {
+        assertEquals(0, SceneExtractor.normalizeGameObjectRotationDegrees(0));
+        assertEquals(90, SceneExtractor.normalizeGameObjectRotationDegrees(512));
+        assertEquals(180, SceneExtractor.normalizeGameObjectRotationDegrees(1024));
+        assertEquals(270, SceneExtractor.normalizeGameObjectRotationDegrees(1536));
+    }
+
+    @Test
+    void keepsOnlySupportedWallOrientationBits()
+    {
+        assertEquals(1, SceneExtractor.normalizeWallOrientation(1));
+        assertEquals(8, SceneExtractor.normalizeWallOrientation(8));
+        assertEquals(null, SceneExtractor.normalizeWallOrientation(0));
+        assertEquals(255, SceneExtractor.normalizeWallOrientation(0x1ff));
+    }
+
+    @Test
     void averagesTexturePixelsIntoRepresentativeRgb()
     {
         assertEquals(0x3f007f, SceneExtractor.averageTextureRgb(new int[] {0x0000ff, 0x7f0000}));

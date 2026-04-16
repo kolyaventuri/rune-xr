@@ -35,9 +35,84 @@ public final class SyntheticSceneFactory
         );
 
         List<SceneObjectPayload> objects = List.of(
-            new SceneObjectPayload("game_tree", "game", "Tree", baseX + 3, baseY + radius + 1, 0),
-            new SceneObjectPayload("wall_north", "wall", "Wall", baseX + radius, baseY + 1, 0),
-            new SceneObjectPayload("decor_banner", "decor", "Banner", baseX + size - 3, baseY + radius - 2, 0)
+            new SceneObjectPayload(
+                "game_tree_" + (baseX + 3) + "_" + (baseY + radius + 1),
+                "game",
+                "Tree",
+                baseX + 3,
+                baseY + radius + 1,
+                0,
+                1,
+                1,
+                null,
+                null,
+                null
+            ),
+            new SceneObjectPayload(
+                "wall_house_sw",
+                "wall",
+                "Stone wall",
+                baseX + radius - 1,
+                baseY + radius - 1,
+                0,
+                null,
+                null,
+                null,
+                1,
+                8
+            ),
+            new SceneObjectPayload(
+                "wall_house_nw",
+                "wall",
+                "Stone wall",
+                baseX + radius - 1,
+                baseY + radius,
+                0,
+                null,
+                null,
+                null,
+                1,
+                2
+            ),
+            new SceneObjectPayload(
+                "wall_house_se",
+                "wall",
+                "Stone wall",
+                baseX + radius,
+                baseY + radius - 1,
+                0,
+                null,
+                null,
+                null,
+                4,
+                8
+            ),
+            new SceneObjectPayload(
+                "wall_house_ne",
+                "wall",
+                "Stone wall",
+                baseX + radius,
+                baseY + radius,
+                0,
+                null,
+                null,
+                null,
+                4,
+                2
+            ),
+            new SceneObjectPayload(
+                "decor_banner",
+                "decor",
+                "Banner",
+                baseX + size - 3,
+                baseY + radius - 2,
+                0,
+                null,
+                null,
+                180,
+                null,
+                null
+            )
         );
 
         tick += 1;

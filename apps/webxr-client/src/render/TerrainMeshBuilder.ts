@@ -2,15 +2,24 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
+  DoubleSide,
   Mesh,
   MeshStandardMaterial,
 } from 'three';
-import type {SceneSnapshot, Tile, TileSurfaceFace, TileSurfaceVertex} from '@rune-xr/protocol';
+import type {SceneSnapshot, Tile, TileSurfaceModel} from '@rune-xr/protocol';
 import {HEIGHT_SCALE, TILE_WORLD_SIZE} from '../config.js';
 
 const LOCAL_TILE_SIZE = 128;
 type TileMap = Map<string, Tile>;
 type BoundarySide = 'west' | 'east' | 'south' | 'north';
+type TileSurfaceFace = TileSurfaceModel['faces'][number];
+type TileSurfaceVertex = TileSurfaceModel['vertices'][number];
+type BoundaryEdge = {start: TileSurfaceVertex; end: TileSurfaceVertex; side: BoundarySide};
+type BoundaryProfile = {kind: 'grid'} | {kind: 'modeled'; edges: BoundaryEdge[]; side: BoundarySide};
+type BoundaryEdgeCache = Map<string, BoundaryEdge[]>;
+
+const TRIANGLE_EPSILON = 1e-6;
+const EDGE_EPSILON = 1e-6;
 
 export function buildTerrainMesh(snapshot: SceneSnapshot) {
   const geometry = buildTerrainGeometry(snapshot);
@@ -19,6 +28,7 @@ export function buildTerrainMesh(snapshot: SceneSnapshot) {
     flatShading: true,
     metalness: 0.02,
     roughness: 0.94,
+    side: DoubleSide,
   });
   const mesh = new Mesh(geometry, material);
 
@@ -41,6 +51,7 @@ export function buildTerrainGeometry(snapshot: SceneSnapshot) {
   const maxHeight = Math.max(...heights);
   const positions: number[] = [];
   const colors: number[] = [];
+  const boundaryEdges = new Map<string, BoundaryEdge[]>();
 
   for (let xIndex = 0; xIndex < xValues.length - 1; xIndex += 1) {
     for (let yIndex = 0; yIndex < yValues.length - 1; yIndex += 1) {
@@ -63,7 +74,7 @@ export function buildTerrainGeometry(snapshot: SceneSnapshot) {
       }
 
       if (a.surface?.model) {
-        appendModeledTile(snapshot, maxY, a, tiles, positions, colors, minHeight, maxHeight);
+        appendModeledTile(snapshot, maxY, a, tiles, positions, colors, minHeight, maxHeight, boundaryEdges);
         continue;
       }
 
@@ -127,6 +138,7 @@ function appendModeledTile(
   colors: number[],
   minHeight: number,
   maxHeight: number,
+  boundaryEdges: BoundaryEdgeCache,
 ) {
   const model = tile.surface?.model;
 
@@ -145,15 +157,21 @@ function appendModeledTile(
 
     const faceColor = resolveFaceColor(face, tile, minHeight, maxHeight);
 
-    appendModelVertex(snapshot, maxY, tile, a, positions);
-    colors.push(faceColor.r, faceColor.g, faceColor.b);
-    appendModelVertex(snapshot, maxY, tile, b, positions);
-    colors.push(faceColor.r, faceColor.g, faceColor.b);
-    appendModelVertex(snapshot, maxY, tile, c, positions);
-    colors.push(faceColor.r, faceColor.g, faceColor.b);
+    appendLocalTriangle(
+      snapshot,
+      maxY,
+      tile,
+      a,
+      b,
+      c,
+      faceColor,
+      positions,
+      colors,
+      {preferUpward: true},
+    );
   }
 
-  appendModeledTileStitches(snapshot, maxY, tile, tiles, positions, colors, minHeight, maxHeight);
+  appendModeledTileStitches(snapshot, maxY, tile, tiles, positions, colors, minHeight, maxHeight, boundaryEdges);
 }
 
 function appendModelVertex(
@@ -187,6 +205,7 @@ function appendModeledTileStitches(
   colors: number[],
   minHeight: number,
   maxHeight: number,
+  boundaryEdges: BoundaryEdgeCache,
 ) {
   const model = tile.surface?.model;
 
@@ -194,40 +213,73 @@ function appendModeledTileStitches(
     return;
   }
 
-  for (const edge of collectBoundaryEdges(model.vertices, model.faces)) {
-    const startHeight = sampleGridEdgeHeight(tile, edge.side, edgeT(edge.start, edge.side), tiles);
-    const endHeight = sampleGridEdgeHeight(tile, edge.side, edgeT(edge.end, edge.side), tiles);
+  for (const edge of boundaryEdgesForTile(tile, boundaryEdges)) {
+    const profile = resolveBoundaryProfile(tile, edge.side, tiles, boundaryEdges);
 
-    if (startHeight === undefined || endHeight === undefined) {
-      continue;
-    }
-
-    if (startHeight === edge.start.y && endHeight === edge.end.y) {
+    if (profile.kind === 'modeled' && !ownsSharedModeledBoundary(edge.side)) {
       continue;
     }
 
     const seamColor = resolveSeamColor(tile, edge.side, tiles, minHeight, maxHeight);
 
-    appendSeamQuad(
-      snapshot,
-      tile,
-      edge.start,
-      edge.end,
-      {x: edge.start.x, y: startHeight, z: edge.start.z},
-      {x: edge.end.x, y: endHeight, z: edge.end.z},
-      seamColor,
-      positions,
-      colors,
-      maxY,
-    );
+    for (const [startT, endT] of collectBoundaryIntervals(edge, profile)) {
+      const start = interpolateBoundaryVertex(edge.start, edge.end, edge.side, startT);
+      const end = interpolateBoundaryVertex(edge.start, edge.end, edge.side, endT);
+      const startHeight = sampleBoundaryProfileHeight(tile, edge.side, startT, tiles, profile);
+      const endHeight = sampleBoundaryProfileHeight(tile, edge.side, endT, tiles, profile);
+
+      if (startHeight === undefined || endHeight === undefined) {
+        continue;
+      }
+
+      const startTarget = {x: start.x, y: startHeight, z: start.z};
+      const endTarget = {x: end.x, y: endHeight, z: end.z};
+
+      if (verticesMatch(start, startTarget) && verticesMatch(end, endTarget)) {
+        continue;
+      }
+
+      appendSeamQuad(
+        snapshot,
+        tile,
+        start,
+        end,
+        startTarget,
+        endTarget,
+        seamColor,
+        positions,
+        colors,
+        maxY,
+      );
+    }
   }
+}
+
+function boundaryEdgesForTile(tile: Tile, cache: BoundaryEdgeCache) {
+  const cached = cache.get(tileKey(tile.x, tile.y));
+
+  if (cached) {
+    return cached;
+  }
+
+  const model = tile.surface?.model;
+  const edges = model ? collectBoundaryEdges(model.vertices, model.faces) : [];
+
+  cache.set(tileKey(tile.x, tile.y), edges);
+  return edges;
 }
 
 function collectBoundaryEdges(vertices: TileSurfaceVertex[], faces: TileSurfaceFace[]) {
   const edges = new Map<string, {count: number; start: number; end: number}>();
 
   for (const face of faces) {
-    for (const [start, end] of [[face.a, face.b], [face.b, face.c], [face.c, face.a]]) {
+    const faceEdges: Array<[number, number]> = [
+      [face.a, face.b],
+      [face.b, face.c],
+      [face.c, face.a],
+    ];
+
+    for (const [start, end] of faceEdges) {
       const key = edgeKey(start, end);
       const existing = edges.get(key);
 
@@ -264,6 +316,45 @@ function collectBoundaryEdges(vertices: TileSurfaceVertex[], faces: TileSurfaceF
   }
 
   return boundaryEdges;
+}
+
+function resolveBoundaryProfile(
+  tile: Tile,
+  side: BoundarySide,
+  tiles: TileMap,
+  boundaryEdges: BoundaryEdgeCache,
+): BoundaryProfile {
+  const neighbor = neighborTile(tile, side, tiles);
+
+  if (!neighbor?.surface?.model) {
+    return {kind: 'grid'};
+  }
+
+  const oppositeSide = oppositeBoundarySide(side);
+  const edges = boundaryEdgesForTile(neighbor, boundaryEdges).filter(edge => edge.side === oppositeSide);
+
+  if (edges.length === 0) {
+    return {kind: 'grid'};
+  }
+
+  return {kind: 'modeled', edges, side: oppositeSide};
+}
+
+function oppositeBoundarySide(side: BoundarySide): BoundarySide {
+  switch (side) {
+    case 'west':
+      return 'east';
+    case 'east':
+      return 'west';
+    case 'south':
+      return 'north';
+    case 'north':
+      return 'south';
+  }
+}
+
+function ownsSharedModeledBoundary(side: BoundarySide) {
+  return side === 'east' || side === 'north';
 }
 
 function edgeKey(start: number, end: number) {
@@ -306,6 +397,119 @@ function sampleGridEdgeHeight(tile: Tile, side: BoundarySide, t: number, tiles: 
   }
 
   return startTile.height + (endTile.height - startTile.height) * t;
+}
+
+function collectBoundaryIntervals(edge: BoundaryEdge, profile: BoundaryProfile) {
+  const startT = edgeT(edge.start, edge.side);
+  const endT = edgeT(edge.end, edge.side);
+  const direction = Math.sign(endT - startT) || 1;
+  const minT = Math.min(startT, endT) - EDGE_EPSILON;
+  const maxT = Math.max(startT, endT) + EDGE_EPSILON;
+  const splitPoints = [startT, endT];
+
+  if (profile.kind === 'modeled') {
+    for (const boundaryEdge of profile.edges) {
+      pushSplitPoint(splitPoints, edgeT(boundaryEdge.start, profile.side), minT, maxT);
+      pushSplitPoint(splitPoints, edgeT(boundaryEdge.end, profile.side), minT, maxT);
+    }
+  }
+
+  splitPoints.sort((left, right) => direction > 0 ? left - right : right - left);
+
+  const intervals: Array<[number, number]> = [];
+
+  for (let index = 0; index < splitPoints.length - 1; index += 1) {
+    const segmentStart = splitPoints[index];
+    const segmentEnd = splitPoints[index + 1];
+
+    if (segmentStart === undefined || segmentEnd === undefined || Math.abs(segmentEnd - segmentStart) <= EDGE_EPSILON) {
+      continue;
+    }
+
+    intervals.push([segmentStart, segmentEnd]);
+  }
+
+  return intervals;
+}
+
+function pushSplitPoint(points: number[], value: number, min: number, max: number) {
+  if (value < min || value > max) {
+    return;
+  }
+
+  if (points.some(existing => Math.abs(existing - value) <= EDGE_EPSILON)) {
+    return;
+  }
+
+  points.push(value);
+}
+
+function sampleBoundaryProfileHeight(
+  tile: Tile,
+  side: BoundarySide,
+  t: number,
+  tiles: TileMap,
+  profile: BoundaryProfile,
+) {
+  if (profile.kind === 'grid') {
+    return sampleGridEdgeHeight(tile, side, t, tiles);
+  }
+
+  return sampleModeledBoundaryHeight(profile.edges, profile.side, t) ?? sampleGridEdgeHeight(tile, side, t, tiles);
+}
+
+function sampleModeledBoundaryHeight(edges: BoundaryEdge[], side: BoundarySide, t: number) {
+  for (const edge of edges) {
+    const startT = edgeT(edge.start, side);
+    const endT = edgeT(edge.end, side);
+    const minT = Math.min(startT, endT) - EDGE_EPSILON;
+    const maxT = Math.max(startT, endT) + EDGE_EPSILON;
+
+    if (t < minT || t > maxT) {
+      continue;
+    }
+
+    const span = endT - startT;
+
+    if (Math.abs(span) <= EDGE_EPSILON) {
+      return edge.start.y;
+    }
+
+    const alpha = clamp01((t - startT) / span);
+    return edge.start.y + (edge.end.y - edge.start.y) * alpha;
+  }
+}
+
+function interpolateBoundaryVertex(
+  start: TileSurfaceVertex,
+  end: TileSurfaceVertex,
+  side: BoundarySide,
+  t: number,
+): TileSurfaceVertex {
+  const startT = edgeT(start, side);
+  const endT = edgeT(end, side);
+  const span = endT - startT;
+
+  if (Math.abs(span) <= EDGE_EPSILON) {
+    return start;
+  }
+
+  const alpha = clamp01((t - startT) / span);
+  return {
+    x: start.x + (end.x - start.x) * alpha,
+    y: start.y + (end.y - start.y) * alpha,
+    z: start.z + (end.z - start.z) * alpha,
+  };
+}
+
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function verticesMatch(left: TileSurfaceVertex, right: TileSurfaceVertex) {
+  return Math.abs(left.x - right.x) <= EDGE_EPSILON
+    && Math.abs(left.y - right.y) <= EDGE_EPSILON
+    && Math.abs(left.z - right.z) <= EDGE_EPSILON;
 }
 
 function edgeHeightTiles(tile: Tile, side: BoundarySide, tiles: TileMap) {
@@ -377,11 +581,6 @@ function appendSeamQuad(
 ) {
   appendLocalTriangle(snapshot, maxY, tile, start, end, startTarget, color, positions, colors);
   appendLocalTriangle(snapshot, maxY, tile, end, endTarget, startTarget, color, positions, colors);
-
-  // Duplicate the seam with reversed winding so steep transition faces stay
-  // visible from either side of the stitched edge.
-  appendLocalTriangle(snapshot, maxY, tile, startTarget, end, start, color, positions, colors);
-  appendLocalTriangle(snapshot, maxY, tile, startTarget, endTarget, end, color, positions, colors);
 }
 
 function appendLocalTriangle(
@@ -394,13 +593,53 @@ function appendLocalTriangle(
   color: Color,
   positions: number[],
   colors: number[],
+  options?: {preferUpward?: boolean},
 ) {
-  appendModelVertex(snapshot, maxY, tile, a, positions);
+  const [first, second, third] = orientTriangle(a, b, c, options);
+
+  if (isDegenerateTriangle(first, second, third)) {
+    return;
+  }
+
+  appendModelVertex(snapshot, maxY, tile, first, positions);
   colors.push(color.r, color.g, color.b);
-  appendModelVertex(snapshot, maxY, tile, b, positions);
+  appendModelVertex(snapshot, maxY, tile, second, positions);
   colors.push(color.r, color.g, color.b);
-  appendModelVertex(snapshot, maxY, tile, c, positions);
+  appendModelVertex(snapshot, maxY, tile, third, positions);
   colors.push(color.r, color.g, color.b);
+}
+
+function orientTriangle(
+  a: TileSurfaceVertex,
+  b: TileSurfaceVertex,
+  c: TileSurfaceVertex,
+  options?: {preferUpward?: boolean},
+) {
+  if (!options?.preferUpward) {
+    return [a, b, c] as const;
+  }
+
+  return triangleNormal(a, b, c).y < 0 ? [a, c, b] as const : [a, b, c] as const;
+}
+
+function isDegenerateTriangle(a: TileSurfaceVertex, b: TileSurfaceVertex, c: TileSurfaceVertex) {
+  const normal = triangleNormal(a, b, c);
+  return normal.x ** 2 + normal.y ** 2 + normal.z ** 2 <= TRIANGLE_EPSILON;
+}
+
+function triangleNormal(a: TileSurfaceVertex, b: TileSurfaceVertex, c: TileSurfaceVertex) {
+  const ux = b.x - a.x;
+  const uy = b.y - a.y;
+  const uz = a.z - b.z;
+  const vx = c.x - a.x;
+  const vy = c.y - a.y;
+  const vz = a.z - c.z;
+
+  return {
+    x: uy * vz - uz * vy,
+    y: uz * vx - ux * vz,
+    z: ux * vy - uy * vx,
+  };
 }
 
 function tileKey(x: number, y: number) {

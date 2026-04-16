@@ -60,6 +60,11 @@ export const sceneObjectSchema = z.object({
 	x: z.number().int(),
 	y: z.number().int(),
 	plane: z.number().int().nonnegative(),
+	sizeX: z.number().int().positive().optional(),
+	sizeY: z.number().int().positive().optional(),
+	rotationDegrees: z.number().int().min(0).max(359).optional(),
+	wallOrientationA: z.number().int().nonnegative().optional(),
+	wallOrientationB: z.number().int().nonnegative().optional(),
 });
 
 export const sceneSnapshotSchema = z.object({

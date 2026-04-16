@@ -81,4 +81,20 @@ describe('WorldStateStore', () => {
     expect(first.terrainChanged).toBe(true);
     expect(second.terrainChanged).toBe(true);
   });
+
+  it('rebuilds objects when wall metadata changes without moving the object', () => {
+    const store = new WorldStateStore();
+
+    store.applySnapshot(sampleSceneSnapshot, 0);
+    const update = store.applySnapshot({
+      ...sampleSceneSnapshot,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      objects: sampleSceneSnapshot.objects.map(object => object.id === 'wall_house_sw'
+        ? {...object, wallOrientationB: 2}
+        : object),
+    }, 100);
+
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(true);
+  });
 });

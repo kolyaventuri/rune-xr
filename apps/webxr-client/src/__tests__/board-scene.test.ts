@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest';
+import type {Object3D} from 'three';
 import type {SceneSnapshot} from '@rune-xr/protocol';
 import {sampleSceneSnapshot} from '@rune-xr/protocol';
 import {BoardScene} from '../render/BoardScene.js';
@@ -90,4 +91,17 @@ describe('BoardScene', () => {
     expect(north).toBeDefined();
     expect(north!.position.z).toBeLessThan(south!.position.z);
   });
+
+  it('renders enclosed walls as explicit wall runs with a roofed building volume', () => {
+    const board = new BoardScene();
+
+    board.applySnapshot(sampleSceneSnapshot, {terrainChanged: true, objectsChanged: true});
+
+    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBeGreaterThanOrEqual(8);
+    expect(countNamedChildren(board.objectGroup.children, 'building-roof')).toBe(1);
+  });
 });
+
+function countNamedChildren(children: Object3D[], name: string) {
+  return children.filter(child => child.name === name).length;
+}

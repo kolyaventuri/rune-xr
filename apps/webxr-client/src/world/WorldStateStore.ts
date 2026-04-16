@@ -105,7 +105,18 @@ function makeTerrainSignature(snapshot: SceneSnapshot) {
 }
 
 function makeObjectSignature(snapshot: SceneSnapshot) {
-  return JSON.stringify(snapshot.objects.map(object => [object.id, object.kind, object.x, object.y]));
+  return JSON.stringify(snapshot.objects.map(object => [
+    object.id,
+    object.kind,
+    object.x,
+    object.y,
+    object.name,
+    object.sizeX,
+    object.sizeY,
+    object.rotationDegrees,
+    object.wallOrientationA,
+    object.wallOrientationB,
+  ]));
 }
 
 function lerp(start: number, end: number, alpha: number) {
