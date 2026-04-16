@@ -4,14 +4,17 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "build": "pnpm -r build",
+    "dev": "concurrently -n bridge,client -c blue,green \"pnpm dev:bridge\" \"pnpm dev:web\"",
     "dev:bridge": "pnpm --filter @rune-xr/protocol build && pnpm --filter @rune-xr/bridge dev",
     "dev:web": "pnpm --filter @rune-xr/protocol build && pnpm --filter @rune-xr/webxr-client dev",
     "dev:sample": "pnpm --filter @rune-xr/bridge sample",
+    "dev:runelite": "./scripts/start-runelite-dev",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "concurrently": "^9.2.1",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4",

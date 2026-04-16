@@ -1,0 +1,6 @@
+#!/bin/sh
+
+cd ./plugins/runelite-plugin
+./gradlew test
+./gradlew jar
+./gradlew run
