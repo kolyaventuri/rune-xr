@@ -3,8 +3,11 @@ import {
   AmbientLight,
   Color,
   DirectionalLight,
+  MOUSE,
   PerspectiveCamera,
   Scene,
+  Spherical,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
@@ -96,9 +99,17 @@ const camera = new PerspectiveCamera(55, 1, 0.01, 20);
 camera.position.set(0.62, 0.48, 0.72);
 
 const controls = new OrbitControls(camera, renderer.domElement);
+const previewRotationInput = {
+  horizontal: 0,
+  tilt: 0,
+};
+let previousFrameTime = performance.now();
 
 controls.enableDamping = true;
 controls.target.set(0.12, 0.06, 0.12);
+controls.mouseButtons.LEFT = MOUSE.PAN;
+controls.mouseButtons.MIDDLE = MOUSE.DOLLY;
+controls.mouseButtons.RIGHT = MOUSE.ROTATE;
 
 scene.add(new AmbientLight('#fff7e6', 1.8));
 const sun = new DirectionalLight('#fff3d1', 2.1);
@@ -125,7 +136,10 @@ const bridgeClient = new BridgeSocketClient({
 
 bridgeClient.connect();
 
-renderer.setAnimationLoop((_time, frame) => {
+renderer.setAnimationLoop((time, frame) => {
+  const deltaSeconds = Math.min((time - previousFrameTime) / 1000, 0.05);
+
+  previousFrameTime = time;
   const snapshot = worldState.getCurrentSnapshot();
 
   if (snapshot) {
@@ -140,6 +154,7 @@ renderer.setAnimationLoop((_time, frame) => {
     });
   }
 
+  updatePreviewCameraRotation(deltaSeconds);
   controls.update();
   renderer.render(scene, camera);
 });
@@ -173,6 +188,90 @@ globalThis.addEventListener('keydown', event => {
   }
 
   setHudVisible(!hudVisible);
+});
+
+globalThis.addEventListener('keydown', event => {
+  if (event.defaultPrevented || !controls.enabled) {
+    return;
+  }
+
+  const target = event.target;
+
+  if (
+    target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target instanceof HTMLButtonElement
+    || (target instanceof HTMLElement && target.isContentEditable)
+  ) {
+    return;
+  }
+
+  switch (event.key) {
+    case 'ArrowLeft': {
+      event.preventDefault();
+      previewRotationInput.horizontal = -1;
+      break;
+    }
+
+    case 'ArrowRight': {
+      event.preventDefault();
+      previewRotationInput.horizontal = 1;
+      break;
+    }
+
+    case 'ArrowUp': {
+      event.preventDefault();
+      previewRotationInput.tilt = -1;
+      break;
+    }
+
+    case 'ArrowDown': {
+      event.preventDefault();
+      previewRotationInput.tilt = 1;
+      break;
+    }
+
+    default:
+  }
+});
+
+globalThis.addEventListener('keyup', event => {
+  switch (event.key) {
+    case 'ArrowLeft': {
+      if (previewRotationInput.horizontal < 0) {
+        previewRotationInput.horizontal = 0;
+      }
+
+      break;
+    }
+
+    case 'ArrowRight': {
+      if (previewRotationInput.horizontal > 0) {
+        previewRotationInput.horizontal = 0;
+      }
+
+      break;
+    }
+
+    case 'ArrowUp': {
+      if (previewRotationInput.tilt < 0) {
+        previewRotationInput.tilt = 0;
+      }
+
+      break;
+    }
+
+    case 'ArrowDown': {
+      if (previewRotationInput.tilt > 0) {
+        previewRotationInput.tilt = 0;
+      }
+
+      break;
+    }
+
+    default:
+  }
 });
 
 void configureArButton();
@@ -245,6 +344,39 @@ function resizeViewport() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
+}
+
+function updatePreviewCameraRotation(deltaSeconds: number) {
+  if (!controls.enabled) {
+    previewRotationInput.horizontal = 0;
+    previewRotationInput.tilt = 0;
+    return;
+  }
+
+  if (previewRotationInput.horizontal === 0 && previewRotationInput.tilt === 0) {
+    return;
+  }
+
+  const rotationSpeed = Math.PI * 0.8;
+  const tiltSpeed = Math.PI * 0.6;
+
+  rotatePreviewCamera(
+    previewRotationInput.horizontal * rotationSpeed * deltaSeconds,
+    previewRotationInput.tilt * tiltSpeed * deltaSeconds,
+  );
+}
+
+function rotatePreviewCamera(deltaTheta: number, deltaPhi = 0) {
+  const offset = new Vector3().subVectors(camera.position, controls.target);
+  const spherical = new Spherical().setFromVector3(offset);
+
+  spherical.theta += deltaTheta;
+  spherical.phi = Math.min(Math.max(spherical.phi + deltaPhi, 0.05), Math.PI - 0.05);
+
+  offset.setFromSpherical(spherical);
+  camera.position.copy(controls.target).add(offset);
+  camera.lookAt(controls.target);
+  controls.update();
 }
 
 function setHudVisible(visible: boolean) {
