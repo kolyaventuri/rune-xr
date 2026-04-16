@@ -24,6 +24,14 @@ type XRNavigator = Navigator & {
   };
 };
 
+type FpsTracker = {
+  sampleFrames: number;
+  sampleTimeMs: number;
+  lastCommitAt: number;
+  displayedFps: number;
+  displayedFrameMs: number;
+};
+
 const root = document.querySelector<HTMLDivElement>('#app');
 
 if (!root) {
@@ -32,6 +40,11 @@ if (!root) {
 
 root.innerHTML = `
   <div class="shell">
+    <aside class="perf-badge" data-perf-badge data-perf-tier="unknown" aria-hidden="true">
+      <span class="perf-label">FPS</span>
+      <strong class="perf-value" data-fps-status>--</strong>
+      <span class="perf-detail" data-frame-time-status>-- ms</span>
+    </aside>
     <button class="hud-toggle" type="button" data-toggle-hud aria-pressed="true">Show HUD</button>
     <section class="hud" data-hud>
       <p class="eyebrow">Rune XR Prototype</p>
@@ -67,6 +80,9 @@ root.innerHTML = `
 
 const viewport = root.querySelector<HTMLDivElement>('[data-viewport]');
 const hud = root.querySelector<HTMLElement>('[data-hud]');
+const perfBadge = root.querySelector<HTMLElement>('[data-perf-badge]');
+const fpsStatus = root.querySelector<HTMLElement>('[data-fps-status]');
+const frameTimeStatus = root.querySelector<HTMLElement>('[data-frame-time-status]');
 const toggleHudButton = root.querySelector<HTMLButtonElement>('[data-toggle-hud]');
 const bridgeStatus = root.querySelector<HTMLElement>('[data-bridge-status]');
 const snapshotStatus = root.querySelector<HTMLElement>('[data-snapshot-status]');
@@ -74,12 +90,28 @@ const arHint = root.querySelector<HTMLElement>('[data-ar-hint]');
 const enterArButton = root.querySelector<HTMLButtonElement>('[data-enter-ar]');
 const loadSampleButton = root.querySelector<HTMLButtonElement>('[data-load-sample]');
 
-if (!viewport || !hud || !toggleHudButton || !bridgeStatus || !snapshotStatus || !arHint || !enterArButton || !loadSampleButton) {
+if (
+  !viewport
+  || !hud
+  || !perfBadge
+  || !fpsStatus
+  || !frameTimeStatus
+  || !toggleHudButton
+  || !bridgeStatus
+  || !snapshotStatus
+  || !arHint
+  || !enterArButton
+  || !loadSampleButton
+) {
   throw new Error('Viewer UI failed to initialize.');
 }
 
 const hudElement = hud;
+const perfBadgeElement = perfBadge;
+const fpsStatusElement = fpsStatus;
+const frameTimeStatusElement = frameTimeStatus;
 const hudToggleButton = toggleHudButton;
+const fpsTracker = createFpsTracker();
 
 let hudVisible = false;
 hudElement.hidden = !hudVisible;
@@ -129,6 +161,9 @@ const bridgeClient = new BridgeSocketClient({
   onSnapshot(snapshot) {
     applySnapshot(snapshot, `Live @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
   },
+  onTextureBatch(textures) {
+    void boardScene.applyTextureBatch(textures);
+  },
   onStatus(status) {
     bridgeStatus.textContent = status;
   },
@@ -137,9 +172,11 @@ const bridgeClient = new BridgeSocketClient({
 bridgeClient.connect();
 
 renderer.setAnimationLoop((time, frame) => {
-  const deltaSeconds = Math.min((time - previousFrameTime) / 1000, 0.05);
+  const deltaMs = Math.min(Math.max(time - previousFrameTime, 0), 50);
+  const deltaSeconds = deltaMs / 1000;
 
   previousFrameTime = time;
+  updateFpsTracker(fpsTracker, deltaMs, time);
   const snapshot = worldState.getCurrentSnapshot();
 
   if (snapshot) {
@@ -385,4 +422,68 @@ function setHudVisible(visible: boolean) {
   hudElement.hidden = !visible;
   hudToggleButton.textContent = visible ? 'Hide HUD' : 'Show HUD';
   hudToggleButton.setAttribute('aria-pressed', String(visible));
+}
+
+function createFpsTracker(): FpsTracker {
+  const now = performance.now();
+
+  return {
+    sampleFrames: 0,
+    sampleTimeMs: 0,
+    lastCommitAt: now,
+    displayedFps: 0,
+    displayedFrameMs: 0,
+  };
+}
+
+function updateFpsTracker(tracker: FpsTracker, deltaMs: number, time: number) {
+  if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
+    return;
+  }
+
+  tracker.sampleFrames += 1;
+  tracker.sampleTimeMs += deltaMs;
+
+  const elapsedSinceCommit = time - tracker.lastCommitAt;
+
+  if (elapsedSinceCommit < 250 && tracker.sampleFrames < 15) {
+    return;
+  }
+
+  const averageFrameMs = tracker.sampleTimeMs / tracker.sampleFrames;
+  const fps = 1000 / averageFrameMs;
+
+  tracker.displayedFrameMs = tracker.displayedFrameMs === 0
+    ? averageFrameMs
+    : mix(tracker.displayedFrameMs, averageFrameMs, 0.35);
+  tracker.displayedFps = tracker.displayedFps === 0
+    ? fps
+    : mix(tracker.displayedFps, fps, 0.35);
+
+  renderPerformanceStats(tracker.displayedFps, tracker.displayedFrameMs);
+  tracker.sampleFrames = 0;
+  tracker.sampleTimeMs = 0;
+  tracker.lastCommitAt = time;
+}
+
+function renderPerformanceStats(fps: number, frameTimeMs: number) {
+  fpsStatusElement.textContent = `${Math.round(fps)}`;
+  frameTimeStatusElement.textContent = `${frameTimeMs.toFixed(1)} ms`;
+  perfBadgeElement.dataset.perfTier = resolvePerformanceTier(fps);
+}
+
+function resolvePerformanceTier(fps: number) {
+  if (fps < 30) {
+    return 'slow';
+  }
+
+  if (fps < 55) {
+    return 'rough';
+  }
+
+  return 'smooth';
+}
+
+function mix(start: number, end: number, alpha: number) {
+  return start + ((end - start) * alpha);
 }

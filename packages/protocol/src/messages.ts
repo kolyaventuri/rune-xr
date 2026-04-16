@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {clientRoleSchema, protocolVersion, sceneSnapshotSchema} from './schema.js';
+import {clientRoleSchema, protocolVersion, sceneSnapshotSchema, textureDefinitionSchema} from './schema.js';
 
 export const helloMessageSchema = z.object({
 	kind: z.literal('hello'),
@@ -13,6 +13,11 @@ export const sceneSnapshotMessageSchema = z.object({
 	snapshot: sceneSnapshotSchema,
 });
 
+export const textureBatchMessageSchema = z.object({
+	kind: z.literal('texture_batch'),
+	textures: z.array(textureDefinitionSchema),
+});
+
 export const pingMessageSchema = z.object({
 	kind: z.literal('ping'),
 	sentAt: z.number().int().nonnegative(),
@@ -20,7 +25,7 @@ export const pingMessageSchema = z.object({
 
 export const ackMessageSchema = z.object({
 	kind: z.literal('ack'),
-	ackedKind: z.enum(['hello', 'scene_snapshot', 'ping']),
+	ackedKind: z.enum(['hello', 'scene_snapshot', 'texture_batch', 'ping']),
 	serverTime: z.number().int().nonnegative(),
 	detail: z.string().min(1).optional(),
 });
@@ -34,6 +39,7 @@ export const errorMessageSchema = z.object({
 export const protocolMessageSchema = z.discriminatedUnion('kind', [
 	helloMessageSchema,
 	sceneSnapshotMessageSchema,
+	textureBatchMessageSchema,
 	pingMessageSchema,
 	ackMessageSchema,
 	errorMessageSchema,
@@ -41,6 +47,7 @@ export const protocolMessageSchema = z.discriminatedUnion('kind', [
 
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
 export type SceneSnapshotMessage = z.infer<typeof sceneSnapshotMessageSchema>;
+export type TextureBatchMessage = z.infer<typeof textureBatchMessageSchema>;
 export type PingMessage = z.infer<typeof pingMessageSchema>;
 export type AckMessage = z.infer<typeof ackMessageSchema>;
 export type ErrorMessage = z.infer<typeof errorMessageSchema>;
@@ -67,6 +74,13 @@ export function createPingMessage(sentAt = Date.now()): PingMessage {
 	return {
 		kind: 'ping',
 		sentAt,
+	};
+}
+
+export function createTextureBatchMessage(textures: TextureBatchMessage['textures']): TextureBatchMessage {
+	return {
+		kind: 'texture_batch',
+		textures,
 	};
 }
 

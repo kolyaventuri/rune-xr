@@ -97,4 +97,50 @@ describe('WorldStateStore', () => {
     expect(update.terrainChanged).toBe(false);
     expect(update.objectsChanged).toBe(true);
   });
+
+  it('rebuilds objects when model geometry changes without moving the object', () => {
+    const store = new WorldStateStore();
+    const initialSnapshot = {
+      ...sampleSceneSnapshot,
+      objects: sampleSceneSnapshot.objects.map(object => object.id === 'game_tree_3201_3194_0_0'
+        ? {
+          ...object,
+          model: {
+            vertices: [
+              {x: 0, y: 0, z: 0},
+              {x: 128, y: 0, z: 0},
+              {x: 0, y: 64, z: 0},
+            ],
+            faces: [
+              {a: 0, b: 1, c: 2, rgb: 0x7f8b3a},
+            ],
+          },
+        }
+        : object),
+    };
+
+    store.applySnapshot(initialSnapshot, 0);
+    const update = store.applySnapshot({
+      ...initialSnapshot,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      objects: initialSnapshot.objects.map(object => object.id === 'game_tree_3201_3194_0_0'
+        ? {
+          ...object,
+          model: {
+            vertices: [
+              {x: 0, y: 0, z: 0},
+              {x: 128, y: 0, z: 0},
+              {x: 0, y: 96, z: 0},
+            ],
+            faces: [
+              {a: 0, b: 1, c: 2, rgb: 0x7f8b3a},
+            ],
+          },
+        }
+        : object),
+    }, 100);
+
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(true);
+  });
 });

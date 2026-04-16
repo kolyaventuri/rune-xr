@@ -30,6 +30,60 @@ body {
   gap: 16px;
 }
 
+.perf-badge {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 3;
+  min-width: 112px;
+  padding: 0.75rem 0.9rem;
+  display: grid;
+  gap: 0.18rem;
+  border: 1px solid rgba(24, 35, 26, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 252, 245, 0.88);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 32px rgba(62, 76, 61, 0.14);
+}
+
+.perf-badge[data-perf-tier='smooth'] {
+  box-shadow:
+    0 0 0 1px rgba(51, 141, 83, 0.18),
+    0 12px 32px rgba(62, 76, 61, 0.14);
+}
+
+.perf-badge[data-perf-tier='rough'] {
+  box-shadow:
+    0 0 0 1px rgba(194, 137, 23, 0.2),
+    0 12px 32px rgba(62, 76, 61, 0.14);
+}
+
+.perf-badge[data-perf-tier='slow'] {
+  box-shadow:
+    0 0 0 1px rgba(194, 73, 45, 0.22),
+    0 12px 32px rgba(62, 76, 61, 0.14);
+}
+
+.perf-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(24, 35, 26, 0.56);
+}
+
+.perf-value {
+  font-size: 1.9rem;
+  line-height: 0.95;
+  font-variant-numeric: tabular-nums;
+  color: #15302a;
+}
+
+.perf-detail {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(24, 35, 26, 0.72);
+}
+
 .hud-toggle {
   position: fixed;
   top: 20px;
@@ -187,6 +241,13 @@ body {
 @media (max-width: 720px) {
   .shell {
     padding: 12px;
+  }
+
+  .perf-badge {
+    top: 12px;
+    left: 12px;
+    min-width: 104px;
+    padding: 0.7rem 0.82rem;
   }
 
   .hud-toggle {

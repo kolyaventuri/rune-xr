@@ -13,10 +13,12 @@ import {
   type Matrix4,
   type Object3D,
 } from 'three';
-import type {SceneObject, SceneSnapshot} from '@rune-xr/protocol';
+import type {SceneObject, SceneSnapshot, TextureDefinition} from '@rune-xr/protocol';
 import {ACTOR_HEIGHT, HEIGHT_SCALE, OBJECT_HEIGHT, TILE_WORLD_SIZE} from '../config.js';
 import type {InterpolatedActor} from '../world/WorldStateStore.js';
-import {buildTerrainMesh} from './TerrainMeshBuilder.js';
+import {buildObjectMeshes} from './ObjectMeshBuilder.js';
+import {buildTerrainMeshes} from './TerrainMeshBuilder.js';
+import {TerrainTextureAtlas} from './TerrainTextureAtlas.js';
 
 const WALL_WEST = 1;
 const WALL_NORTH = 2;
@@ -103,6 +105,7 @@ export class BoardScene {
   };
 
   private readonly actorNodes = new Map<string, Mesh>();
+  private readonly terrainTextureAtlas = new TerrainTextureAtlas();
   private heightMap = new Map<string, number>();
   private maxY = 0;
   private snapshot?: SceneSnapshot;
@@ -159,6 +162,10 @@ export class BoardScene {
     this.root.visible = visible;
   }
 
+  async applyTextureBatch(textures: TextureDefinition[]) {
+    await this.terrainTextureAtlas.upsertBatch(textures);
+  }
+
   applyPlacementMatrix(matrix: Matrix4) {
     this.root.matrix.copy(matrix);
     this.root.matrix.decompose(this.root.position, this.root.quaternion, this.root.scale);
@@ -176,7 +183,7 @@ export class BoardScene {
     this.terrainBuildCount += 1;
     disposeChildren(this.terrainGroup);
 
-    const terrain = buildTerrainMesh(snapshot);
+    const terrain = buildTerrainMeshes(snapshot, this.terrainTextureAtlas.texture);
     const xCount = new Set(snapshot.tiles.map(tile => tile.x)).size;
     const zCount = new Set(snapshot.tiles.map(tile => tile.y)).size;
     const grid = new GridHelper(
@@ -193,13 +200,32 @@ export class BoardScene {
     );
     applyTransparency(grid.material);
 
-    this.terrainGroup.add(terrain, grid);
+    this.terrainGroup.add(terrain.colorMesh);
+
+    if (terrain.texturedMesh) {
+      this.terrainGroup.add(terrain.texturedMesh);
+    }
+
+    this.terrainGroup.add(grid);
   }
 
   private rebuildObjects(objects: SceneObject[]) {
     disposeChildren(this.objectGroup);
 
-    const {segments, enclosedRegions} = this.collectWallData(objects);
+    const modelObjects = objects.filter(object => object.model);
+    const proxyObjects = objects.filter(object => !object.model);
+
+    if (modelObjects.length > 0 && this.snapshot) {
+      const meshes = buildObjectMeshes(this.snapshot, modelObjects, this.terrainTextureAtlas.texture);
+
+      this.objectGroup.add(meshes.colorMesh);
+
+      if (meshes.texturedMesh) {
+        this.objectGroup.add(meshes.texturedMesh);
+      }
+    }
+
+    const {segments, enclosedRegions} = this.collectWallData(proxyObjects);
     this.addWallSegments(segments);
 
     const enclosedCells = new Set<string>();
@@ -214,7 +240,7 @@ export class BoardScene {
       }
     }
 
-    this.addProps(objects, enclosedCells);
+    this.addProps(proxyObjects, enclosedCells);
   }
 
   private collectWallData(objects: SceneObject[]) {
@@ -726,7 +752,7 @@ function cornerKey(x: number, y: number) {
 }
 
 function parseCornerKey(key: string): [number, number] {
-  const [x, y] = key.split(':').map(Number);
+  const [x = 0, y = 0] = key.split(':').map(Number);
   return [x, y];
 }
 
@@ -792,7 +818,7 @@ function tileKey(x: number, y: number) {
 }
 
 function parseTileKey(key: string): Cell {
-  const [x, y] = key.split(':').map(Number);
+  const [x = 0, y = 0] = key.split(':').map(Number);
   return {x, y};
 }
 

@@ -11,7 +11,8 @@ public record SceneObjectPayload(
     Integer sizeY,
     Integer rotationDegrees,
     Integer wallOrientationA,
-    Integer wallOrientationB
+    Integer wallOrientationB,
+    TileSurfaceModelPayload model
 )
 {
 }

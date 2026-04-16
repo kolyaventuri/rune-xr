@@ -46,6 +46,7 @@ public final class SyntheticSceneFactory
                 1,
                 null,
                 null,
+                null,
                 null
             ),
             new SceneObjectPayload(
@@ -59,7 +60,8 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 1,
-                8
+                8,
+                null
             ),
             new SceneObjectPayload(
                 "wall_house_nw",
@@ -72,7 +74,8 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 1,
-                2
+                2,
+                null
             ),
             new SceneObjectPayload(
                 "wall_house_se",
@@ -85,7 +88,8 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 4,
-                8
+                8,
+                null
             ),
             new SceneObjectPayload(
                 "wall_house_ne",
@@ -98,7 +102,8 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 4,
-                2
+                2,
+                null
             ),
             new SceneObjectPayload(
                 "decor_banner",
@@ -110,6 +115,7 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 180,
+                null,
                 null,
                 null
             )

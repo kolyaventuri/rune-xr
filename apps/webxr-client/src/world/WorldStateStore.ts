@@ -116,6 +116,7 @@ function makeObjectSignature(snapshot: SceneSnapshot) {
     object.rotationDegrees,
     object.wallOrientationA,
     object.wallOrientationB,
+    object.model,
   ]));
 }
 

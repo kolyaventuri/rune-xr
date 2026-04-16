@@ -23,5 +23,12 @@ public final class ProtocolMessages
             return new SceneSnapshotMessage("scene_snapshot", snapshot);
         }
     }
-}
 
+    public record TextureBatchMessage(String kind, TextureBatchPayload textures)
+    {
+        public static TextureBatchMessage fromTextures(TextureBatchPayload textures)
+        {
+            return new TextureBatchMessage("texture_batch", textures);
+        }
+    }
+}

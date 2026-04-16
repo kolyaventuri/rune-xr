@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import dev.rune.xr.runelite.config.RuneXrConfig;
 import dev.rune.xr.runelite.model.ProtocolMessages;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
+import dev.rune.xr.runelite.model.TextureBatchPayload;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
@@ -52,6 +53,27 @@ public final class BridgeClientService implements AutoCloseable
         catch (RuntimeException exception)
         {
             log.debug("Unable to send Rune XR snapshot to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
+            close();
+            return false;
+        }
+    }
+
+    public boolean sendTextureBatch(RuneXrConfig config, TextureBatchPayload textures)
+    {
+        if (textures.textures().isEmpty())
+        {
+            return true;
+        }
+
+        try
+        {
+            ensureConnected(config);
+            socket.sendText(gson.toJson(ProtocolMessages.TextureBatchMessage.fromTextures(textures)), true).join();
+            return true;
+        }
+        catch (RuntimeException exception)
+        {
+            log.debug("Unable to send Rune XR textures to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
             close();
             return false;
         }

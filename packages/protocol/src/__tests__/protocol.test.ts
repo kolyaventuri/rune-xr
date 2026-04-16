@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
 import {
 	createHelloMessage,
+	createTextureBatchMessage,
 	parseProtocolMessage,
 	parseSceneSnapshot,
 	sampleSceneSnapshot,
@@ -25,6 +26,21 @@ describe('protocol fixtures', () => {
 		const payload = structuredClone(hello);
 
 		expect(parseProtocolMessage(payload)).toEqual(hello);
+	});
+
+	it('parses texture batch envelopes', () => {
+		const textureBatch = createTextureBatchMessage([
+			{
+				id: 12,
+				width: 128,
+				height: 128,
+				pngBase64: 'Zm9v',
+				animationDirection: 1,
+				animationSpeed: 2,
+			},
+		]);
+
+		expect(parseProtocolMessage(structuredClone(textureBatch))).toEqual(textureBatch);
 	});
 
 	it('rejects malformed scene snapshots', () => {
@@ -85,6 +101,27 @@ describe('protocol fixtures', () => {
 					...sampleSceneSnapshot.objects[1],
 					wallOrientationA: 1,
 					wallOrientationB: 8,
+					model: {
+						vertices: [
+							{x: 0, y: 0, z: 0},
+							{x: 128, y: 0, z: 0},
+							{x: 0, y: 128, z: 128},
+						],
+						faces: [
+							{
+								a: 0,
+								b: 1,
+								c: 2,
+								texture: 7,
+								uA: 0,
+								vA: 0,
+								uB: 1,
+								vB: 0,
+								uC: 0,
+								vC: 1,
+							},
+						],
+					},
 				},
 				...sampleSceneSnapshot.objects.slice(2),
 			],
@@ -93,5 +130,7 @@ describe('protocol fixtures', () => {
 		expect(parsed.objects[0]?.sizeX).toBe(2);
 		expect(parsed.objects[0]?.rotationDegrees).toBe(270);
 		expect(parsed.objects[1]?.wallOrientationB).toBe(8);
+		expect(parsed.objects[1]?.model?.faces[0]?.texture).toBe(7);
+		expect(parsed.objects[1]?.model?.faces[0]?.uB).toBe(1);
 	});
 });

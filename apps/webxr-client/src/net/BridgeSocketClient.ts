@@ -3,10 +3,12 @@ import {
   parseProtocolMessage,
   type ProtocolMessage,
   type SceneSnapshot,
+  type TextureDefinition,
 } from '@rune-xr/protocol';
 
 type BridgeSocketClientOptions = {
   onSnapshot: (snapshot: SceneSnapshot) => void;
+  onTextureBatch: (textures: TextureDefinition[]) => void;
   onStatus: (status: string) => void;
 };
 
@@ -66,6 +68,11 @@ export class BridgeSocketClient {
   private handleMessage(message: ProtocolMessage) {
     if (message.kind === 'scene_snapshot') {
       this.options.onSnapshot(message.snapshot);
+      return;
+    }
+
+    if (message.kind === 'texture_batch') {
+      this.options.onTextureBatch(message.textures);
       return;
     }
 

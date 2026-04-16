@@ -4,10 +4,14 @@ import com.google.gson.Gson;
 import com.google.inject.Provides;
 import dev.rune.xr.runelite.config.RuneXrConfig;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
+import dev.rune.xr.runelite.model.TextureBatchPayload;
+import dev.rune.xr.runelite.model.TextureDefinitionPayload;
 import dev.rune.xr.runelite.service.BridgeClientService;
 import dev.rune.xr.runelite.service.SceneExtractor;
 import dev.rune.xr.runelite.service.SyntheticSceneFactory;
+import java.util.LinkedHashSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +51,7 @@ public class RuneXrPlugin extends Plugin
     private SceneExtractor sceneExtractor;
     private SyntheticSceneFactory syntheticSceneFactory;
     private String lastSnapshotPayload;
+    private final Set<Integer> sentTextureIds = new LinkedHashSet<>();
 
     @Override
     protected void startUp()
@@ -54,6 +59,7 @@ public class RuneXrPlugin extends Plugin
         bridgeClient = new BridgeClientService(gson);
         sceneExtractor = new SceneExtractor(client);
         syntheticSceneFactory = new SyntheticSceneFactory();
+        clearSentState();
         startSnapshotLoop();
     }
 
@@ -68,7 +74,7 @@ public class RuneXrPlugin extends Plugin
             bridgeClient = null;
         }
 
-        lastSnapshotPayload = null;
+        clearSentState();
     }
 
     @Subscribe
@@ -79,7 +85,7 @@ public class RuneXrPlugin extends Plugin
             return;
         }
 
-        lastSnapshotPayload = null;
+        clearSentState();
 
         switch (event.getKey())
         {
@@ -133,6 +139,8 @@ public class RuneXrPlugin extends Plugin
 
     private void sendIfChanged(SceneSnapshotPayload snapshot)
     {
+        sendPendingTextures(snapshot);
+
         String payload = gson.toJson(snapshot);
 
         if (payload.equals(lastSnapshotPayload))
@@ -143,7 +151,87 @@ public class RuneXrPlugin extends Plugin
         if (bridgeClient.sendSnapshot(config, snapshot))
         {
             lastSnapshotPayload = payload;
+            return;
         }
+
+        clearSentState();
+    }
+
+    private void sendPendingTextures(SceneSnapshotPayload snapshot)
+    {
+        if (config.syntheticMode())
+        {
+            return;
+        }
+
+        LinkedHashSet<Integer> pendingTextureIds = collectTextureIds(snapshot);
+        pendingTextureIds.removeAll(sentTextureIds);
+
+        if (pendingTextureIds.isEmpty())
+        {
+            return;
+        }
+
+        var definitions = sceneExtractor.extractTextureDefinitions(pendingTextureIds);
+
+        if (definitions.isEmpty())
+        {
+            return;
+        }
+
+        if (!bridgeClient.sendTextureBatch(config, new TextureBatchPayload(definitions)))
+        {
+            clearSentState();
+            return;
+        }
+
+        for (TextureDefinitionPayload definition : definitions)
+        {
+            sentTextureIds.add(definition.id());
+        }
+    }
+
+    private LinkedHashSet<Integer> collectTextureIds(SceneSnapshotPayload snapshot)
+    {
+        LinkedHashSet<Integer> textureIds = new LinkedHashSet<>();
+
+        for (var tile : snapshot.tiles())
+        {
+            var surface = tile.surface();
+
+            if (surface == null)
+            {
+                continue;
+            }
+
+            if (surface.texture() != null)
+            {
+                textureIds.add(surface.texture());
+            }
+
+            var model = surface.model();
+
+            if (model == null)
+            {
+                continue;
+            }
+
+            for (var face : model.faces())
+            {
+                if (face.texture() != null)
+                {
+                    textureIds.add(face.texture());
+                }
+            }
+        }
+
+        return textureIds;
+    }
+
+    private void clearSentState()
+    {
+        lastSnapshotPayload = null;
+        sentTextureIds.clear();
     }
 
     @Provides

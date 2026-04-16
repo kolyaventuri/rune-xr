@@ -1,7 +1,7 @@
 import {Color} from 'three';
 import {describe, expect, it} from 'vitest';
 import type {SceneSnapshot} from '@rune-xr/protocol';
-import {buildTerrainGeometry} from '../render/TerrainMeshBuilder.js';
+import {buildTerrainGeometry, buildTexturedTerrainGeometry} from '../render/TerrainMeshBuilder.js';
 
 describe('TerrainMeshBuilder', () => {
   it('builds upward-facing normals for flat terrain quads', () => {
@@ -75,6 +75,43 @@ describe('TerrainMeshBuilder', () => {
     expect(colors.getZ(0)).toBeCloseTo(expected.b, 5);
   });
 
+  it('builds textured flat terrain UVs from tile texture ids', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0, surface: {texture: 12},
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const geometry = buildTexturedTerrainGeometry(snapshot);
+    const positions = geometry.getAttribute('position');
+    const uvs = geometry.getAttribute('uv');
+
+    expect(positions.count).toBe(6);
+    expect(uvs.count).toBe(6);
+    expect(uvs.getX(0)).toBeCloseTo(12 / 16, 5);
+    expect(uvs.getY(0)).toBeCloseTo(0, 5);
+    expect(uvs.getX(1)).toBeCloseTo(13 / 16, 5);
+    expect(uvs.getY(2)).toBeCloseTo(1 / 16, 5);
+  });
+
   it('renders shaped tile models with their own face triangles', () => {
     const snapshot: SceneSnapshot = {
       version: 1,
@@ -129,6 +166,56 @@ describe('TerrainMeshBuilder', () => {
     expect(colors.getX(0)).toBeCloseTo(expected.r, 5);
     expect(colors.getY(0)).toBeCloseTo(expected.g, 5);
     expect(colors.getZ(0)).toBeCloseTo(expected.b, 5);
+  });
+
+  it('builds textured modeled tile faces with slot-relative UVs', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          height: 0,
+          surface: {
+            model: {
+              vertices: [
+                {x: 0, y: 0, z: 0},
+                {x: 128, y: 0, z: 0},
+                {x: 0, y: 0, z: 128},
+              ],
+              faces: [
+                {a: 0, b: 1, c: 2, texture: 3},
+              ],
+            },
+          },
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const geometry = buildTexturedTerrainGeometry(snapshot);
+    const uvs = geometry.getAttribute('uv');
+
+    expect(uvs.count).toBe(3);
+    expect(uvs.getX(0)).toBeCloseTo(3 / 16, 5);
+    expect(uvs.getY(0)).toBeCloseTo(0, 5);
+    expect(uvs.getX(1)).toBeCloseTo(4 / 16, 5);
+    expect(uvs.getY(2)).toBeCloseTo(1 / 16, 5);
   });
 
   it('maps larger world Y values toward smaller board Z values', () => {

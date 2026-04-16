@@ -6,12 +6,15 @@ import express from 'express';
 import {
   createAckMessage,
   createErrorMessage,
+  createTextureBatchMessage,
   parseProtocolMessage,
   type AckMessage,
   type HelloMessage,
   type ProtocolMessage,
   type SceneSnapshot,
   type SceneSnapshotMessage,
+  type TextureBatchMessage,
+  type TextureDefinition,
 } from '@rune-xr/protocol';
 import {WebSocketServer, type RawData, type WebSocket} from 'ws';
 
@@ -86,6 +89,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   const server = createServer(app);
   const webSocketServer = new WebSocketServer({server, path: '/ws'});
   const clients = new Set<WebSocket>();
+  const textureDefinitions = new Map<number, TextureDefinition>();
   let pluginSocket: WebSocket | undefined;
   let latestSnapshot: SceneSnapshot | undefined;
 
@@ -126,6 +130,30 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     }
   };
 
+  const sendTextureReplay = (socket: WebSocket) => {
+    if (textureDefinitions.size === 0) {
+      return;
+    }
+
+    sendMessage(socket, createTextureBatchMessage([...textureDefinitions.values()]));
+  };
+
+  const broadcastTextureBatch = (textures: TextureDefinition[]) => {
+    if (textures.length === 0) {
+      return;
+    }
+
+    const message = createTextureBatchMessage(textures);
+
+    for (const texture of textures) {
+      textureDefinitions.set(texture.id, texture);
+    }
+
+    for (const client of clients) {
+      sendMessage(client, message);
+    }
+  };
+
   const handleHello = (socket: WebSocket, message: HelloMessage) => {
     const state = socketState.get(socket);
 
@@ -150,6 +178,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     state.role = 'client';
     clients.add(socket);
     sendMessage(socket, createAckMessage('hello', 'client_connected'));
+    sendTextureReplay(socket);
     if (latestSnapshot) {
       broadcastToSocket(socket, latestSnapshot);
     }
@@ -199,6 +228,13 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
 
       if (state.role !== 'plugin') {
         sendError(socket, 'forbidden', 'Only the plugin connection may publish scene snapshots.');
+        return;
+      }
+
+      if (message.kind === 'texture_batch') {
+        const textureMessage: TextureBatchMessage = message;
+
+        broadcastTextureBatch(textureMessage.textures);
         return;
       }
 

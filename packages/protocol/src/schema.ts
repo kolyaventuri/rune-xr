@@ -18,6 +18,12 @@ export const tileSurfaceFaceSchema = z.object({
 	c: z.number().int().nonnegative(),
 	rgb: z.number().int().nonnegative().max(0xffffff).optional(),
 	texture: z.number().int().nonnegative().optional(),
+	uA: z.number().optional(),
+	vA: z.number().optional(),
+	uB: z.number().optional(),
+	vB: z.number().optional(),
+	uC: z.number().optional(),
+	vC: z.number().optional(),
 });
 
 export const tileSurfaceModelSchema = z.object({
@@ -65,6 +71,7 @@ export const sceneObjectSchema = z.object({
 	rotationDegrees: z.number().int().min(0).max(359).optional(),
 	wallOrientationA: z.number().int().nonnegative().optional(),
 	wallOrientationB: z.number().int().nonnegative().optional(),
+	model: tileSurfaceModelSchema.optional(),
 });
 
 export const sceneSnapshotSchema = z.object({
@@ -78,12 +85,22 @@ export const sceneSnapshotSchema = z.object({
 	objects: z.array(sceneObjectSchema),
 });
 
+export const textureDefinitionSchema = z.object({
+	id: z.number().int().nonnegative(),
+	width: z.number().int().positive(),
+	height: z.number().int().positive(),
+	pngBase64: z.string().min(1),
+	animationDirection: z.number().int().nonnegative().optional(),
+	animationSpeed: z.number().int().nonnegative().optional(),
+});
+
 export type Tile = z.infer<typeof tileSchema>;
 export type TileSurfaceModel = z.infer<typeof tileSurfaceModelSchema>;
 export type TileSurface = z.infer<typeof tileSurfaceSchema>;
 export type Actor = z.infer<typeof actorSchema>;
 export type SceneObject = z.infer<typeof sceneObjectSchema>;
 export type SceneSnapshot = z.infer<typeof sceneSnapshotSchema>;
+export type TextureDefinition = z.infer<typeof textureDefinitionSchema>;
 export type ActorType = z.infer<typeof actorTypeSchema>;
 export type ObjectKind = z.infer<typeof objectKindSchema>;
 export type ClientRole = z.infer<typeof clientRoleSchema>;

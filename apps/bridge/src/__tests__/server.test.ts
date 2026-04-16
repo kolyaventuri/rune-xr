@@ -1,6 +1,7 @@
 import {afterEach, describe, expect, it} from 'vitest';
 import {
   createHelloMessage,
+  createTextureBatchMessage,
   sampleSceneSnapshot,
   type ProtocolMessage,
   type SceneSnapshotMessage,
@@ -12,6 +13,7 @@ const handles: BridgeServerHandle[] = [];
 
 type WaitableSocket = {
   socket: WebSocket;
+  receivedKinds: () => ProtocolMessage['kind'][];
   waitForKind: <K extends ProtocolMessage['kind']>(kind: K) => Promise<Extract<ProtocolMessage, {kind: K}>>;
 };
 
@@ -27,7 +29,7 @@ afterEach(async () => {
 
 describe('bridge server', () => {
   it('broadcasts snapshots and replays the latest snapshot to new clients', async () => {
-    const bridge = await startBridgeServer({port: 0});
+    const bridge = await startBridgeServer({host: '127.0.0.1', port: 0});
     handles.push(bridge);
 
     const plugin = trackSocket(await openSocket(bridge.address.port));
@@ -40,6 +42,17 @@ describe('bridge server', () => {
     await plugin.waitForKind('ack');
     await client.waitForKind('ack');
 
+    const textureMessage = createTextureBatchMessage([
+      {
+        id: 12,
+        width: 128,
+        height: 128,
+        pngBase64: 'Zm9v',
+        animationDirection: 1,
+        animationSpeed: 2,
+      },
+    ]);
+
     const sceneMessage: SceneSnapshotMessage = {
       kind: 'scene_snapshot',
       snapshot: {
@@ -48,14 +61,20 @@ describe('bridge server', () => {
       },
     };
 
+    plugin.socket.send(JSON.stringify(textureMessage));
     plugin.socket.send(JSON.stringify(sceneMessage));
 
+    expect(await client.waitForKind('texture_batch')).toEqual(textureMessage);
     const received = await client.waitForKind('scene_snapshot');
     expect(received).toEqual(sceneMessage);
 
     laterClient.socket.send(JSON.stringify(createHelloMessage('client', 'late-client')));
     await laterClient.waitForKind('ack');
+    expect(await laterClient.waitForKind('texture_batch')).toEqual(textureMessage);
     expect(await laterClient.waitForKind('scene_snapshot')).toEqual(sceneMessage);
+    expect(laterClient.receivedKinds().indexOf('texture_batch')).toBeLessThan(
+      laterClient.receivedKinds().indexOf('scene_snapshot'),
+    );
 
     plugin.socket.close();
     client.socket.close();
@@ -63,7 +82,7 @@ describe('bridge server', () => {
   });
 
   it('rejects snapshots from non-plugin clients', async () => {
-    const bridge = await startBridgeServer({port: 0});
+    const bridge = await startBridgeServer({host: '127.0.0.1', port: 0});
     handles.push(bridge);
     const client = trackSocket(await openSocket(bridge.address.port));
 
@@ -83,7 +102,7 @@ describe('bridge server', () => {
   });
 
   it('reports bridge health over http', async () => {
-    const bridge = await startBridgeServer({port: 0});
+    const bridge = await startBridgeServer({host: '127.0.0.1', port: 0});
     handles.push(bridge);
 
     const response = await fetch(`http://127.0.0.1:${bridge.address.port}/healthz`);
@@ -114,6 +133,9 @@ function trackSocket(socket: WebSocket) {
 
   return {
     socket,
+    receivedKinds() {
+      return messages.map(message => message.kind);
+    },
     async waitForKind<K extends ProtocolMessage['kind']>(kind: K) {
       const existing = messages.find(message => message.kind === kind);
 
