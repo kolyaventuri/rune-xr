@@ -49,6 +49,7 @@ export class BoardScene {
   private readonly actorNodes = new Map<string, Mesh>();
   private readonly objectNodes = new Map<string, Mesh>();
   private heightMap = new Map<string, number>();
+  private maxY = 0;
   private snapshot?: SceneSnapshot;
 
   constructor() {
@@ -59,6 +60,7 @@ export class BoardScene {
   applySnapshot(snapshot: SceneSnapshot, options: {terrainChanged: boolean}) {
     this.snapshot = snapshot;
     this.heightMap = new Map(snapshot.tiles.map(tile => [`${tile.x}:${tile.y}`, tile.height] as const));
+    this.maxY = Math.max(snapshot.baseY, ...snapshot.tiles.map(tile => tile.y));
 
     if (options.terrainChanged || this.terrainGroup.children.length === 0) {
       this.rebuildTerrain(snapshot);
@@ -82,7 +84,7 @@ export class BoardScene {
       mesh.position.set(
         (actor.renderX - this.snapshot!.baseX + 0.5) * TILE_WORLD_SIZE,
         this.heightAt(actor.renderX, actor.renderY) * HEIGHT_SCALE + ACTOR_HEIGHT / 2 + 0.008,
-        (actor.renderY - this.snapshot!.baseY + 0.5) * TILE_WORLD_SIZE,
+        (this.maxY - actor.renderY + 0.5) * TILE_WORLD_SIZE,
       );
     }
 
@@ -151,7 +153,7 @@ export class BoardScene {
       mesh.position.set(
         (object.x - this.snapshot!.baseX + 0.5) * TILE_WORLD_SIZE,
         this.heightAt(object.x, object.y) * HEIGHT_SCALE + OBJECT_HEIGHT / 2 + 0.01,
-        (object.y - this.snapshot!.baseY + 0.5) * TILE_WORLD_SIZE,
+        (this.maxY - object.y + 0.5) * TILE_WORLD_SIZE,
       );
       mesh.rotation.y = MathUtils.degToRad((hashString(object.id) % 360 + 360) % 360);
     }

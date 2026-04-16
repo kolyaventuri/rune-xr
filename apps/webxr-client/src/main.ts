@@ -29,7 +29,7 @@ if (!root) {
 
 root.innerHTML = `
   <div class="shell">
-    <button class="hud-toggle" type="button" data-toggle-hud aria-pressed="true">Hide HUD</button>
+    <button class="hud-toggle" type="button" data-toggle-hud aria-pressed="true">Show HUD</button>
     <section class="hud" data-hud>
       <p class="eyebrow">Rune XR Prototype</p>
       <h1 class="title">Quest-ready tabletop RuneScape</h1>
@@ -78,7 +78,8 @@ if (!viewport || !hud || !toggleHudButton || !bridgeStatus || !snapshotStatus ||
 const hudElement = hud;
 const hudToggleButton = toggleHudButton;
 
-let hudVisible = true;
+let hudVisible = false;
+hudElement.hidden = !hudVisible;
 
 const renderer = new WebGLRenderer({
   alpha: true,
@@ -154,7 +155,7 @@ toggleHudButton.addEventListener('click', () => {
   setHudVisible(!hudVisible);
 });
 
-window.addEventListener('keydown', event => {
+globalThis.addEventListener('keydown', event => {
   if (event.repeat || event.defaultPrevented || event.key.toLowerCase() !== 'h') {
     return;
   }
@@ -162,11 +163,11 @@ window.addEventListener('keydown', event => {
   const target = event.target;
 
   if (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    target instanceof HTMLButtonElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
+    target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target instanceof HTMLButtonElement
+    || (target instanceof HTMLElement && target.isContentEditable)
   ) {
     return;
   }

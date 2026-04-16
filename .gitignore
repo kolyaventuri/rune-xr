@@ -8,3 +8,4 @@ plugins/runelite-plugin/build
 plugins/runelite-plugin/.gradle
 plugins/runelite-plugin/out
 
+plugins/runelite-plugin/bin/

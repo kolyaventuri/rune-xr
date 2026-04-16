@@ -123,11 +123,45 @@ describe('TerrainMeshBuilder', () => {
 
     expect(positions.count).toBe(3);
     expect(positions.getX(0)).toBeCloseTo(0, 5);
-    expect(positions.getZ(1)).toBeCloseTo(0.04, 5);
-    expect(positions.getX(2)).toBeCloseTo(0.04, 5);
+    expect(positions.getZ(0)).toBeCloseTo(0.04, 5);
+    expect(positions.getX(1)).toBeCloseTo(0.04, 5);
+    expect(positions.getZ(2)).toBeCloseTo(0, 5);
     expect(colors.getX(0)).toBeCloseTo(expected.r, 5);
     expect(colors.getY(0)).toBeCloseTo(expected.g, 5);
     expect(colors.getZ(0)).toBeCloseTo(expected.b, 5);
+  });
+
+  it('maps larger world Y values toward smaller board Z values', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const geometry = buildTerrainGeometry(snapshot);
+    const positions = geometry.getAttribute('position');
+    const zValues = Array.from({length: positions.count}, (_, index) => positions.getZ(index));
+
+    expect(Math.min(...zValues)).toBeCloseTo(0, 5);
+    expect(Math.max(...zValues)).toBeCloseTo(0.04, 5);
   });
 
   it('keeps modeled tile normals facing upward', () => {
@@ -177,5 +211,56 @@ describe('TerrainMeshBuilder', () => {
     expect(normals.getY(0)).toBeCloseTo(1, 5);
     expect(Math.abs(normals.getX(0))).toBeLessThan(1e-5);
     expect(Math.abs(normals.getZ(0))).toBeLessThan(1e-5);
+  });
+
+  it('stitches modeled tile edges back to the coarse terrain border', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          height: 0,
+          surface: {
+            model: {
+              vertices: [
+                {x: 0, y: -10, z: 0},
+                {x: 128, y: -10, z: 0},
+                {x: 0, y: -10, z: 128},
+              ],
+              faces: [
+                {a: 0, b: 1, c: 2},
+              ],
+            },
+          },
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const geometry = buildTerrainGeometry(snapshot);
+    const positions = geometry.getAttribute('position');
+
+    expect(positions.count).toBe(27);
+
+    const seamHeights = Array.from({length: positions.count}, (_, index) => positions.getY(index));
+
+    expect(seamHeights.some(height => Math.abs(height) < 1e-6)).toBe(true);
+    expect(seamHeights.some(height => Math.abs(height + 0.025) < 1e-6)).toBe(true);
   });
 });
