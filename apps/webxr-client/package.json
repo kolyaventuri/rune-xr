@@ -1,0 +1,26 @@
+{
+  "name": "@rune-xr/webxr-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "pnpm --filter @rune-xr/protocol build",
+    "predev": "pnpm --filter @rune-xr/protocol build",
+    "prepreview": "pnpm --filter @rune-xr/protocol build",
+    "pretest": "pnpm --filter @rune-xr/protocol build",
+    "build": "vite build",
+    "dev": "vite --host 0.0.0.0",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rune-xr/protocol": "workspace:*",
+    "three": "^0.176.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.176.0",
+    "jsdom": "^26.1.0",
+    "vite": "^6.3.5"
+  }
+}

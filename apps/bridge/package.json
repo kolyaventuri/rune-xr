@@ -1,0 +1,27 @@
+{
+  "name": "@rune-xr/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "prebuild": "pnpm --filter @rune-xr/protocol build",
+    "predev": "pnpm --filter @rune-xr/protocol build",
+    "pretest": "pnpm --filter @rune-xr/protocol build",
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "sample": "tsx src/sampleSender.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rune-xr/protocol": "workspace:*",
+    "express": "^4.21.2",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/ws": "^8.18.1"
+  }
+}
