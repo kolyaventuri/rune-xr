@@ -1,0 +1,143 @@
+:root {
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", "Avenir Next", system-ui, sans-serif;
+  line-height: 1.45;
+  font-weight: 400;
+  color: #f5eedf;
+  background:
+    radial-gradient(circle at top, rgb(202 140 60 / 0.18), transparent 34%),
+    linear-gradient(180deg, #121313 0%, #1c1814 52%, #101113 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.benchmark-shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.benchmark-hero {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.benchmark-title {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+}
+
+.benchmark-copy {
+  max-width: 68ch;
+  margin: 0;
+  color: #d3c9b6;
+}
+
+.benchmark-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.benchmark-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-weight: 600;
+  color: #17120d;
+  background: linear-gradient(135deg, #f1c37c, #c9842f);
+  cursor: pointer;
+}
+
+.benchmark-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.benchmark-status {
+  color: #f1c37c;
+  font-weight: 600;
+}
+
+.benchmark-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.benchmark-panel {
+  border: 1px solid rgb(241 195 124 / 0.18);
+  border-radius: 22px;
+  padding: 18px;
+  background: rgb(27 24 21 / 0.86);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.22);
+}
+
+.benchmark-panel h2,
+.benchmark-panel h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.benchmark-panel p {
+  margin-top: 0;
+  color: #d3c9b6;
+}
+
+.benchmark-meta,
+.benchmark-stats,
+.benchmark-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.benchmark-meta-item,
+.benchmark-stat,
+.benchmark-detail {
+  border-radius: 16px;
+  padding: 12px;
+  background: rgb(255 255 255 / 0.04);
+}
+
+.benchmark-label {
+  display: block;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #b79f77;
+}
+
+.benchmark-value {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.benchmark-result-list {
+  display: grid;
+  gap: 16px;
+}
+
+.benchmark-empty {
+  color: #9f9380;
+}
+
+@media (max-width: 640px) {
+  .benchmark-shell {
+    padding-inline: 16px;
+  }
+}

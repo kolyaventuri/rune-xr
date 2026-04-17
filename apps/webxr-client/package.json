@@ -8,6 +8,7 @@
     "predev": "pnpm --filter @rune-xr/protocol build",
     "prepreview": "pnpm --filter @rune-xr/protocol build",
     "pretest": "pnpm --filter @rune-xr/protocol build",
+    "benchmark:meshes": "tsx src/benchmark/runMeshBenchmarks.ts",
     "build": "vite build",
     "dev": "vite --host 0.0.0.0",
     "lint": "tsc -p tsconfig.json --noEmit",
