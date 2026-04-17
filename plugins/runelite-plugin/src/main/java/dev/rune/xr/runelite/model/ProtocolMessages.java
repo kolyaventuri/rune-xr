@@ -33,4 +33,12 @@ public final class ProtocolMessages
             return new TextureBatchMessage("texture_batch", textures.textures());
         }
     }
+
+    public record ObjectModelBatchMessage(String kind, List<ObjectModelDefinitionPayload> models)
+    {
+        public static ObjectModelBatchMessage fromModels(ObjectModelBatchPayload models)
+        {
+            return new ObjectModelBatchMessage("object_model_batch", models.models());
+        }
+    }
 }

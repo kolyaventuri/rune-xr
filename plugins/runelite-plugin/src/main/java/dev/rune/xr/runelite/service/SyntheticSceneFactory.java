@@ -47,6 +47,7 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 null,
+                null,
                 null
             ),
             new SceneObjectPayload(
@@ -61,6 +62,7 @@ public final class SyntheticSceneFactory
                 null,
                 1,
                 8,
+                null,
                 null
             ),
             new SceneObjectPayload(
@@ -75,6 +77,7 @@ public final class SyntheticSceneFactory
                 null,
                 1,
                 2,
+                null,
                 null
             ),
             new SceneObjectPayload(
@@ -89,6 +92,7 @@ public final class SyntheticSceneFactory
                 null,
                 4,
                 8,
+                null,
                 null
             ),
             new SceneObjectPayload(
@@ -103,6 +107,7 @@ public final class SyntheticSceneFactory
                 null,
                 4,
                 2,
+                null,
                 null
             ),
             new SceneObjectPayload(
@@ -115,6 +120,7 @@ public final class SyntheticSceneFactory
                 null,
                 null,
                 180,
+                null,
                 null,
                 null,
                 null

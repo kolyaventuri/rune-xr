@@ -211,9 +211,8 @@ public final class SceneExtractor
                 }
 
                 Tile tile = planeTiles[sceneX][sceneY];
-                int renderLevel = tile == null ? plane : tile.getRenderLevel();
-                int rawHeight = heights[renderLevel][sceneX][sceneY];
-                TileSurfacePayload surface = tile == null ? null : extractTileSurface(scene, tile, sceneX, sceneY);
+                int rawHeight = heights[plane][sceneX][sceneY];
+                TileSurfacePayload surface = tile == null ? null : extractTileSurface(scene, tile, sceneX, sceneY, heights);
 
                 tiles.add(new TilePayload(worldX, worldY, plane, normalizeTileHeight(rawHeight), surface));
             }
@@ -293,17 +292,29 @@ public final class SceneExtractor
 
         if (wall != null)
         {
-            objects.add(buildWallPayload(wall, plane));
+            SceneObjectPayload payload = buildWallPayload(wall, plane);
+            if (payload != null)
+            {
+                objects.add(payload);
+            }
         }
 
         if (decor != null)
         {
-            objects.add(buildTileObjectPayload("decor", decor, plane, 0, null, null));
+            SceneObjectPayload payload = buildTileObjectPayload("decor", decor, plane, 0, null, null);
+            if (payload != null)
+            {
+                objects.add(payload);
+            }
         }
 
         if (ground != null)
         {
-            objects.add(buildTileObjectPayload("ground", ground, plane, 0, null, null));
+            SceneObjectPayload payload = buildTileObjectPayload("ground", ground, plane, 0, null, null);
+            if (payload != null)
+            {
+                objects.add(payload);
+            }
         }
 
         int gameIndex = 0;
@@ -319,13 +330,22 @@ public final class SceneExtractor
                 continue;
             }
 
-            objects.add(buildGameObjectPayload(gameObject, plane, gameIndex));
+            SceneObjectPayload payload = buildGameObjectPayload(gameObject, plane, gameIndex);
+            if (payload != null)
+            {
+                objects.add(payload);
+            }
             gameIndex += 1;
         }
     }
 
     private SceneObjectPayload buildWallPayload(WallObject wall, int plane)
     {
+        if (!hasRenderable(wall.getRenderable1(), wall.getRenderable2()))
+        {
+            return null;
+        }
+
         Integer wallOrientationA = normalizeWallOrientation(wall.getOrientationA());
         Integer wallOrientationB = normalizeWallOrientation(wall.getOrientationB());
         return buildTileObjectPayload(
@@ -344,12 +364,27 @@ public final class SceneExtractor
 
     private SceneObjectPayload buildGameObjectPayload(GameObject gameObject, int plane, int gameIndex)
     {
+        if (!hasRenderable(gameObject.getRenderable()))
+        {
+            return null;
+        }
+
         ObjectComposition composition = resolveObjectComposition(gameObject.getId());
         WorldPoint point = gameObject.getWorldLocation();
+        String name = resolveObjectName("Game object", composition);
+        TileSurfaceModelPayload model = extractObjectModel(gameObject, List.of(
+            new RenderablePlacement(gameObject.getRenderable(), gameObject.getModelOrientation(), 0, 0)
+        ));
+
+        if (!shouldEmitObjectPayload("game", name, model))
+        {
+            return null;
+        }
+
         return new SceneObjectPayload(
             buildInstanceId("game", gameObject, point, plane, gameIndex),
             "game",
-            resolveObjectName("Game object", composition),
+            name,
             point.getX(),
             point.getY(),
             plane,
@@ -358,9 +393,8 @@ public final class SceneExtractor
             normalizeGameObjectRotationDegrees(gameObject.getOrientation()),
             null,
             null,
-            extractObjectModel(gameObject, List.of(
-                new RenderablePlacement(gameObject.getRenderable(), gameObject.getModelOrientation(), 0, 0)
-            ))
+            null,
+            model
         );
     }
 
@@ -376,13 +410,19 @@ public final class SceneExtractor
     {
         ObjectComposition composition = resolveObjectComposition(object.getId());
         WorldPoint point = object.getWorldLocation();
+        String name = resolveObjectName(defaultObjectName(kind), composition);
         Integer sizeX = composition == null ? null : composition.getSizeX();
         Integer sizeY = composition == null ? null : composition.getSizeY();
+
+        if (!shouldEmitObjectPayload(kind, name, model))
+        {
+            return null;
+        }
 
         return new SceneObjectPayload(
             buildInstanceId(kind, object, point, plane, variantIndex),
             kind,
-            resolveObjectName(defaultObjectName(kind), composition),
+            name,
             point.getX(),
             point.getY(),
             plane,
@@ -391,6 +431,7 @@ public final class SceneExtractor
             null,
             wallOrientationA,
             wallOrientationB,
+            null,
             model
         );
     }
@@ -404,27 +445,66 @@ public final class SceneExtractor
         Integer wallOrientationB
     )
     {
-        TileSurfaceModelPayload model;
-
         if (object instanceof DecorativeObject decorativeObject)
         {
-            model = extractObjectModel(decorativeObject, List.of(
-                new RenderablePlacement(decorativeObject.getRenderable(), 0, decorativeObject.getXOffset(), decorativeObject.getYOffset()),
-                new RenderablePlacement(decorativeObject.getRenderable2(), 0, decorativeObject.getXOffset2(), decorativeObject.getYOffset2())
-            ));
-        }
-        else if (object instanceof GroundObject groundObject)
-        {
-            model = extractObjectModel(groundObject, List.of(
-                new RenderablePlacement(groundObject.getRenderable(), 0, 0, 0)
-            ));
-        }
-        else
-        {
-            model = null;
+            if (!hasRenderable(decorativeObject.getRenderable(), decorativeObject.getRenderable2()))
+            {
+                return null;
+            }
+
+            return buildTileObjectPayload(
+                kind,
+                object,
+                plane,
+                variantIndex,
+                wallOrientationA,
+                wallOrientationB,
+                extractObjectModel(decorativeObject, List.of(
+                    new RenderablePlacement(decorativeObject.getRenderable(), 0, decorativeObject.getXOffset(), decorativeObject.getYOffset()),
+                    new RenderablePlacement(decorativeObject.getRenderable2(), 0, decorativeObject.getXOffset2(), decorativeObject.getYOffset2())
+                ))
+            );
         }
 
-        return buildTileObjectPayload(kind, object, plane, variantIndex, wallOrientationA, wallOrientationB, model);
+        if (object instanceof GroundObject groundObject)
+        {
+            if (!hasRenderable(groundObject.getRenderable()))
+            {
+                return null;
+            }
+
+            return buildTileObjectPayload(
+                kind,
+                object,
+                plane,
+                variantIndex,
+                wallOrientationA,
+                wallOrientationB,
+                extractObjectModel(groundObject, List.of(
+                    new RenderablePlacement(groundObject.getRenderable(), 0, 0, 0)
+                ))
+            );
+        }
+
+        return buildTileObjectPayload(kind, object, plane, variantIndex, wallOrientationA, wallOrientationB, null);
+    }
+
+    static boolean hasRenderable(Renderable... renderables)
+    {
+        for (Renderable renderable : renderables)
+        {
+            if (renderable != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static boolean shouldEmitObjectPayload(String kind, String name, TileSurfaceModelPayload model)
+    {
+        return model != null || !defaultObjectName(kind).equals(name);
     }
 
     private String buildInstanceId(String kind, TileObject object, WorldPoint point, int plane, int variantIndex)
@@ -478,7 +558,7 @@ public final class SceneExtractor
         return name;
     }
 
-    private String defaultObjectName(String kind)
+    private static String defaultObjectName(String kind)
     {
         return switch (kind)
         {
@@ -682,16 +762,11 @@ public final class SceneExtractor
         }
     }
 
-    private Model resolveRenderableModel(Renderable renderable)
+    static Model resolveRenderableModel(Renderable renderable)
     {
         if (renderable == null)
         {
             return null;
-        }
-
-        if (renderable instanceof Model model)
-        {
-            return model;
         }
 
         if (renderable instanceof DynamicObject dynamicObject)
@@ -699,7 +774,12 @@ public final class SceneExtractor
             return dynamicObject.getModelZbuf();
         }
 
-        return null;
+        if (renderable instanceof Model model)
+        {
+            return model;
+        }
+
+        return renderable.getModel();
     }
 
     private TileSurfaceFacePayload extractModelFace(
@@ -936,19 +1016,36 @@ public final class SceneExtractor
         return (redByte << 16) | (greenByte << 8) | blueByte;
     }
 
-    private TileSurfacePayload extractTileSurface(Scene scene, Tile tile, int sceneX, int sceneY)
+    static Integer resolveBridgeHeight(Tile tile, int sceneX, int sceneY, int[][][] heights)
     {
-        Tile surfaceTile = tile;
-        SceneTilePaint paint = surfaceTile.getSceneTilePaint();
-        SceneTileModel model = surfaceTile.getSceneTileModel();
+        if (tile == null || tile.getBridge() == null)
+        {
+            return null;
+        }
+
+        int renderLevel = tile.getRenderLevel();
+
+        if (renderLevel < 0 || renderLevel >= heights.length)
+        {
+            return null;
+        }
+
+        return normalizeTileHeight(heights[renderLevel][sceneX][sceneY]);
+    }
+
+    private TileSurfacePayload extractTileSurface(Scene scene, Tile tile, int sceneX, int sceneY, int[][][] heights)
+    {
+        SceneTilePaint paint = tile.getSceneTilePaint();
+        SceneTileModel model = tile.getSceneTileModel();
         Integer texture = paint == null ? firstModelTexture(model) : normalizeTexture(paint.getTexture());
         Integer rgb = paint == null ? resolveModelRgb(texture, model) : normalizeRgb(paint.getRBG());
         byte[][][] tileShapes = scene.getTileShapes();
         short[][][] overlayIds = scene.getOverlayIds();
         short[][][] underlayIds = scene.getUnderlayIds();
-        int plane = surfaceTile.getPlane();
+        int plane = tile.getPlane();
         Integer shape = model == null ? Byte.toUnsignedInt(tileShapes[plane][sceneX][sceneY]) : model.getShape();
         TileSurfaceModelPayload surfaceModel = extractSurfaceModel(model, sceneX, sceneY);
+        Boolean hasBridge = tile.getBridge() != null;
 
         return new TileSurfacePayload(
             rgb,
@@ -956,8 +1053,9 @@ public final class SceneExtractor
             normalizeId(overlayIds[plane][sceneX][sceneY]),
             normalizeId(underlayIds[plane][sceneX][sceneY]),
             shape,
-            surfaceTile.getRenderLevel(),
-            tile.getBridge() != null,
+            tile.getRenderLevel(),
+            hasBridge,
+            resolveBridgeHeight(tile, sceneX, sceneY, heights),
             surfaceModel
         );
     }

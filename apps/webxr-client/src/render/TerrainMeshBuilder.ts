@@ -3,6 +3,7 @@ import {
   BufferGeometry,
   Color,
   DoubleSide,
+  FrontSide,
   MeshBasicMaterial,
   Mesh,
   type Texture,
@@ -27,9 +28,10 @@ type GeometryBuffers = {
 
 const TRIANGLE_EPSILON = 1e-6
 const EDGE_EPSILON = 1e-6
+const BRIDGE_DECK_COLOR = new Color('#6f675c')
 
 export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas: Texture) {
-  const {colorGeometry, texturedGeometry} = buildTerrainGeometries(snapshot)
+  const {colorGeometry, texturedGeometry, bridgeGeometry} = buildTerrainGeometries(snapshot)
   const colorMaterial = new MeshBasicMaterial({
     vertexColors: true,
     side: DoubleSide,
@@ -60,7 +62,22 @@ export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas:
     texturedMesh.renderOrder = 1
   }
 
-  return {colorMesh, texturedMesh}
+  const bridgePositionAttribute = bridgeGeometry.getAttribute('position')
+  const bridgeDeckMesh = bridgePositionAttribute && bridgePositionAttribute.count > 0
+    ? new Mesh(bridgeGeometry, new MeshBasicMaterial({
+      vertexColors: true,
+      side: FrontSide,
+    }))
+    : undefined
+
+  if (bridgeDeckMesh) {
+    bridgeDeckMesh.name = 'bridge-deck'
+    bridgeDeckMesh.receiveShadow = true
+    bridgeDeckMesh.castShadow = false
+    bridgeDeckMesh.renderOrder = 2
+  }
+
+  return {colorMesh, texturedMesh, bridgeDeckMesh}
 }
 
 export function buildTerrainGeometry(snapshot: SceneSnapshot) {
@@ -76,6 +93,7 @@ function buildTerrainGeometries(snapshot: SceneSnapshot) {
     return {
       colorGeometry: new BufferGeometry(),
       texturedGeometry: new BufferGeometry(),
+      bridgeGeometry: new BufferGeometry(),
     }
   }
 
@@ -88,6 +106,7 @@ function buildTerrainGeometries(snapshot: SceneSnapshot) {
   const maxHeight = Math.max(...heights)
   const colorBuffers = createGeometryBuffers()
   const texturedBuffers = createGeometryBuffers()
+  const bridgeBuffers = createGeometryBuffers()
   const boundaryEdges = new Map<string, BoundaryEdge[]>()
 
   for (let xIndex = 0; xIndex < xValues.length - 1; xIndex += 1) {
@@ -125,6 +144,11 @@ function buildTerrainGeometries(snapshot: SceneSnapshot) {
         continue
       }
 
+      if (a.surface?.bridgeHeight !== undefined) {
+        appendBridgeTile(snapshot, maxY, a, b, c, d, colorBuffers, texturedBuffers, bridgeBuffers, minHeight, maxHeight)
+        continue
+      }
+
       appendFlatTile(snapshot, maxY, a, b, c, d, colorBuffers, texturedBuffers, minHeight, maxHeight)
     }
   }
@@ -132,6 +156,7 @@ function buildTerrainGeometries(snapshot: SceneSnapshot) {
   return {
     colorGeometry: buildColorGeometry(colorBuffers),
     texturedGeometry: buildTexturedGeometry(texturedBuffers),
+    bridgeGeometry: buildColorGeometry(bridgeBuffers),
   }
 }
 
@@ -347,6 +372,45 @@ function resolveFaceColor(face: TileSurfaceFace, tile: Tile, minHeight: number, 
   }
 
   return resolveTileColor(tile, minHeight, maxHeight)
+}
+
+function appendBridgeTile(
+  snapshot: SceneSnapshot,
+  maxY: number,
+  a: Tile,
+  b: Tile,
+  c: Tile,
+  d: Tile,
+  colorBuffers: GeometryBuffers,
+  texturedBuffers: GeometryBuffers,
+  bridgeBuffers: GeometryBuffers,
+  minHeight: number,
+  maxHeight: number,
+) {
+  appendFlatTile(snapshot, maxY, a, b, c, d, colorBuffers, texturedBuffers, minHeight, maxHeight)
+
+  const deckHeight = a.surface?.bridgeHeight ?? a.height
+  const bridgeA = bridgeDeckTile(a, deckHeight)
+  const bridgeB = bridgeDeckTile(b, deckHeight)
+  const bridgeC = bridgeDeckTile(c, deckHeight)
+  const bridgeD = bridgeDeckTile(d, deckHeight)
+  const quad = [bridgeA, bridgeB, bridgeC, bridgeB, bridgeD, bridgeC]
+
+  for (const tile of quad) {
+    bridgeBuffers.positions.push(
+      (tile.x - snapshot.baseX) * TILE_WORLD_SIZE,
+      tile.height * HEIGHT_SCALE,
+      toBoardZ(maxY, tile.y),
+    )
+    bridgeBuffers.colors.push(BRIDGE_DECK_COLOR.r, BRIDGE_DECK_COLOR.g, BRIDGE_DECK_COLOR.b)
+  }
+}
+
+function bridgeDeckTile(tile: Tile, fallbackHeight: number): Tile {
+  return {
+    ...tile,
+    height: tile.surface?.bridgeHeight ?? fallbackHeight,
+  }
 }
 
 function appendModeledTileStitches(

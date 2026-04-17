@@ -143,4 +143,32 @@ describe('WorldStateStore', () => {
     expect(update.terrainChanged).toBe(false);
     expect(update.objectsChanged).toBe(true);
   });
+
+  it('rebuilds objects when an object model key changes without moving the object', () => {
+    const store = new WorldStateStore();
+    const initialSnapshot = {
+      ...sampleSceneSnapshot,
+      objects: sampleSceneSnapshot.objects.map(object => object.id === 'game_tree_3201_3194_0_0'
+        ? {
+          ...object,
+          modelKey: 'object-model:a',
+        }
+        : object),
+    };
+
+    store.applySnapshot(initialSnapshot, 0);
+    const update = store.applySnapshot({
+      ...initialSnapshot,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      objects: initialSnapshot.objects.map(object => object.id === 'game_tree_3201_3194_0_0'
+        ? {
+          ...object,
+          modelKey: 'object-model:b',
+        }
+        : object),
+    }, 100);
+
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(true);
+  });
 });

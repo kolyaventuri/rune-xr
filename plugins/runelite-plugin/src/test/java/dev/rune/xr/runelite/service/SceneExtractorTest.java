@@ -1,12 +1,17 @@
 package dev.rune.xr.runelite.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
+import net.runelite.api.Model;
+import net.runelite.api.Renderable;
 import net.runelite.api.SceneTileModel;
+import net.runelite.api.Tile;
 import dev.rune.xr.runelite.model.TileSurfaceModelPayload;
 import org.junit.jupiter.api.Test;
 
@@ -54,6 +59,56 @@ class SceneExtractorTest
         assertEquals(8, SceneExtractor.normalizeWallOrientation(8));
         assertEquals(null, SceneExtractor.normalizeWallOrientation(0));
         assertEquals(255, SceneExtractor.normalizeWallOrientation(0x1ff));
+    }
+
+    @Test
+    void ignoresObjectsWithoutRenderableGeometry()
+    {
+        Renderable renderable = (Renderable) Proxy.newProxyInstance(
+            Renderable.class.getClassLoader(),
+            new Class<?>[] {Renderable.class},
+            (proxy, method, args) -> null
+        );
+
+        assertFalse(SceneExtractor.hasRenderable((Renderable) null));
+        assertFalse(SceneExtractor.hasRenderable(null, null));
+        assertTrue(SceneExtractor.hasRenderable(renderable));
+        assertTrue(SceneExtractor.hasRenderable(null, renderable));
+    }
+
+    @Test
+    void resolvesModelsFromGenericRenderableWrappers()
+    {
+        Model model = (Model) Proxy.newProxyInstance(
+            Model.class.getClassLoader(),
+            new Class<?>[] {Model.class},
+            (proxy, method, args) -> null
+        );
+        Renderable renderable = (Renderable) Proxy.newProxyInstance(
+            Renderable.class.getClassLoader(),
+            new Class<?>[] {Renderable.class},
+            (proxy, method, args) -> "getModel".equals(method.getName()) ? model : null
+        );
+
+        assertSame(model, SceneExtractor.resolveRenderableModel(renderable));
+    }
+
+    @Test
+    void resolvesBridgeHeightFromRenderLevelHeights()
+    {
+        int[][][] heights = new int[4][104][104];
+        heights[2][10][11] = -240;
+
+        assertEquals(30, SceneExtractor.resolveBridgeHeight(tileWithBridgeAndRenderLevel(2), 10, 11, heights));
+        assertNull(SceneExtractor.resolveBridgeHeight(tileWithRenderLevel(2), 10, 11, heights));
+    }
+
+    @Test
+    void suppressesAnonymousObjectsWhenNoModelCanBeExtracted()
+    {
+        assertFalse(SceneExtractor.shouldEmitObjectPayload("wall", "Wall object", null));
+        assertFalse(SceneExtractor.shouldEmitObjectPayload("game", "Game object", null));
+        assertTrue(SceneExtractor.shouldEmitObjectPayload("game", "Rock", null));
     }
 
     @Test
@@ -123,5 +178,38 @@ class SceneExtractorTest
         assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbB());
         assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbC());
         assertEquals(0, payload.faces().get(0).texture());
+    }
+
+    private static Tile tileWithRenderLevel(int renderLevel)
+    {
+        return (Tile) Proxy.newProxyInstance(
+            Tile.class.getClassLoader(),
+            new Class<?>[] {Tile.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getRenderLevel", "getPlane" -> renderLevel;
+                default -> null;
+            }
+        );
+    }
+
+    private static Tile tileWithBridgeAndRenderLevel(int renderLevel)
+    {
+        Tile bridge = (Tile) Proxy.newProxyInstance(
+            Tile.class.getClassLoader(),
+            new Class<?>[] {Tile.class},
+            (proxy, method, args) -> null
+        );
+
+        return (Tile) Proxy.newProxyInstance(
+            Tile.class.getClassLoader(),
+            new Class<?>[] {Tile.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getRenderLevel", "getPlane" -> renderLevel;
+                case "getBridge" -> bridge;
+                default -> null;
+            }
+        );
     }
 }

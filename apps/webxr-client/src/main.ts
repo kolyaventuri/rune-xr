@@ -11,7 +11,13 @@ import {
   WebGLRenderer,
 } from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
-import {type SceneSnapshot, type TextureDefinition, sampleSceneSnapshot} from '@rune-xr/protocol';
+import {
+  type ObjectModelDefinition,
+  type SceneObject,
+  type SceneSnapshot,
+  type TextureDefinition,
+  sampleSceneSnapshot,
+} from '@rune-xr/protocol';
 import {BoardScene} from './render/BoardScene.js';
 import {BridgeSocketClient} from './net/BridgeSocketClient.js';
 import {WorldStateStore} from './world/WorldStateStore.js';
@@ -126,6 +132,7 @@ const wallTextureStatusElement = wallTextureStatus;
 const objectTexturePreviewsElement = objectTexturePreviews;
 const fpsTracker = createFpsTracker();
 const texturePreviewUrls = new Map<number, string>();
+const objectModelStore = new Map<string, ObjectModelDefinition['model']>();
 
 let currentTexturePreviewDescriptors: Array<{id: number; label: string}> = [];
 
@@ -175,6 +182,20 @@ scene.add(boardScene.root, xrPlacementController.reticle);
 applySnapshot(sampleSceneSnapshot, 'Loaded sample fixture');
 
 const bridgeClient = new BridgeSocketClient({
+  onObjectModelBatch(models) {
+    cacheObjectModels(models);
+    boardScene.applyObjectModelBatch(models);
+
+    const snapshot = worldState.getCurrentSnapshot();
+
+    if (!snapshot) {
+      return;
+    }
+
+    wallTextureStatusElement.textContent = summarizeObjectTextures(snapshot, objectModelStore);
+    currentTexturePreviewDescriptors = collectTexturePreviewDescriptors(snapshot, objectModelStore);
+    renderObjectTexturePreviews();
+  },
   onSnapshot(snapshot) {
     applySnapshot(snapshot, `Live @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
   },
@@ -375,8 +396,8 @@ function applySnapshot(snapshot: SceneSnapshot, label: string) {
   });
   boardScene.updateActors(worldState.getInterpolatedActors());
   snapshotStatus!.textContent = label;
-  wallTextureStatusElement.textContent = summarizeObjectTextures(snapshot);
-  currentTexturePreviewDescriptors = collectTexturePreviewDescriptors(snapshot);
+  wallTextureStatusElement.textContent = summarizeObjectTextures(snapshot, objectModelStore);
+  currentTexturePreviewDescriptors = collectTexturePreviewDescriptors(snapshot, objectModelStore);
   renderObjectTexturePreviews();
 }
 
@@ -515,11 +536,13 @@ function mix(start: number, end: number, alpha: number) {
   return start + ((end - start) * alpha);
 }
 
-function summarizeObjectTextures(snapshot: SceneSnapshot) {
+function summarizeObjectTextures(snapshot: SceneSnapshot, models: Map<string, ObjectModelDefinition['model']>) {
   const summaries = new Map<string, {faces: number; texturedFaces: number; textureIds: Set<number>}>();
 
   for (const object of snapshot.objects) {
-    if (!object.model) {
+    const model = resolveObjectModel(object, models);
+
+    if (!model) {
       continue;
     }
 
@@ -534,7 +557,7 @@ function summarizeObjectTextures(snapshot: SceneSnapshot) {
       summaries.set(object.kind, summary);
     }
 
-    for (const face of object.model.faces) {
+    for (const face of model.faces) {
       summary.faces += 1;
 
       if (typeof face.texture !== 'number') {
@@ -565,7 +588,25 @@ function cacheTexturePreviews(textures: TextureDefinition[]) {
   }
 }
 
-function collectTexturePreviewDescriptors(snapshot: SceneSnapshot) {
+function cacheObjectModels(models: ObjectModelDefinition[]) {
+  for (const model of models) {
+    objectModelStore.set(model.key, model.model);
+  }
+}
+
+function resolveObjectModel(object: SceneObject, models: Map<string, ObjectModelDefinition['model']>) {
+  if (object.model) {
+    return object.model;
+  }
+
+  if (!object.modelKey) {
+    return undefined;
+  }
+
+  return models.get(object.modelKey);
+}
+
+function collectTexturePreviewDescriptors(snapshot: SceneSnapshot, models: Map<string, ObjectModelDefinition['model']>) {
   const descriptors: Array<{id: number; label: string}> = [];
   const seenTextureIds = new Set<number>();
 
@@ -573,11 +614,13 @@ function collectTexturePreviewDescriptors(snapshot: SceneSnapshot) {
     const textureIds = new Set<number>();
 
     for (const object of snapshot.objects) {
-      if (object.kind !== kind || !object.model) {
+      const model = resolveObjectModel(object, models);
+
+      if (object.kind !== kind || !model) {
         continue;
       }
 
-      for (const face of object.model.faces) {
+      for (const face of model.faces) {
         if (typeof face.texture === 'number') {
           textureIds.add(face.texture);
         }

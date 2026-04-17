@@ -188,6 +188,72 @@ describe('BoardScene', () => {
     expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBe(0);
   });
 
+  it('rebuilds proxy objects when referenced model batches arrive', () => {
+    const board = new BoardScene();
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [
+        {
+          id: 'wall_proxy',
+          kind: 'wall',
+          name: 'Castle wall',
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          wallOrientationA: 1,
+          modelKey: 'object-model:wall',
+        },
+      ],
+    };
+
+    board.applySnapshot(snapshot, {terrainChanged: true, objectsChanged: true});
+
+    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBeGreaterThan(0);
+
+    board.applyObjectModelBatch([
+      {
+        key: 'object-model:wall',
+        model: {
+          vertices: [
+            {x: 0, y: 0, z: 0},
+            {x: 128, y: 0, z: 0},
+            {x: 0, y: 128, z: 0},
+          ],
+          faces: [
+            {
+              a: 0,
+              b: 1,
+              c: 2,
+              rgb: 0x888888,
+              texture: 12,
+              uA: 0,
+              vA: 0,
+              uB: 1,
+              vB: 0,
+              uC: 0,
+              vC: 1,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const colorMesh = board.objectGroup.children.find(child => child.name === 'object-color');
+
+    expect(colorMesh).toBeInstanceOf(Mesh);
+    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBe(0);
+  });
+
   it('preserves per-vertex object face colors', () => {
     const board = new BoardScene();
     const snapshot: SceneSnapshot = {

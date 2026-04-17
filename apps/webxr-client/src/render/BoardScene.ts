@@ -13,7 +13,7 @@ import {
   type Matrix4,
   type Object3D,
 } from 'three';
-import type {SceneObject, SceneSnapshot, TextureDefinition} from '@rune-xr/protocol';
+import type {ObjectModelDefinition, SceneObject, SceneSnapshot, TextureDefinition} from '@rune-xr/protocol';
 import {ACTOR_HEIGHT, HEIGHT_SCALE, OBJECT_HEIGHT, TILE_WORLD_SIZE} from '../config.js';
 import type {InterpolatedActor} from '../world/WorldStateStore.js';
 import {buildObjectMeshes} from './ObjectMeshBuilder.js';
@@ -105,6 +105,7 @@ export class BoardScene {
   };
 
   private readonly actorNodes = new Map<string, Mesh>();
+  private readonly objectModelStore = new Map<string, NonNullable<SceneObject['model']>>();
   private readonly terrainTextureAtlas = new TerrainTextureAtlas();
   private heightMap = new Map<string, number>();
   private maxY = 0;
@@ -117,7 +118,10 @@ export class BoardScene {
 
   applySnapshot(snapshot: SceneSnapshot, options: {terrainChanged: boolean; objectsChanged?: boolean}) {
     this.snapshot = snapshot;
-    this.heightMap = new Map(snapshot.tiles.map(tile => [`${tile.x}:${tile.y}`, tile.height] as const));
+    this.heightMap = new Map(snapshot.tiles.map(tile => [
+      `${tile.x}:${tile.y}`,
+      tile.surface?.bridgeHeight ?? tile.height,
+    ] as const));
     this.maxY = Math.max(snapshot.baseY, ...snapshot.tiles.map(tile => tile.y));
 
     if (options.terrainChanged || this.terrainGroup.children.length === 0) {
@@ -170,6 +174,22 @@ export class BoardScene {
     }
   }
 
+  applyObjectModelBatch(models: ObjectModelDefinition[]) {
+    let shouldRebuildObjects = false;
+
+    for (const definition of models) {
+      this.objectModelStore.set(definition.key, definition.model);
+
+      if (this.snapshot?.objects.some(object => object.modelKey === definition.key)) {
+        shouldRebuildObjects = true;
+      }
+    }
+
+    if (shouldRebuildObjects && this.snapshot) {
+      this.rebuildObjects(this.snapshot.objects);
+    }
+  }
+
   applyPlacementMatrix(matrix: Matrix4) {
     this.root.matrix.copy(matrix);
     this.root.matrix.decompose(this.root.position, this.root.quaternion, this.root.scale);
@@ -210,14 +230,22 @@ export class BoardScene {
       this.terrainGroup.add(terrain.texturedMesh);
     }
 
+    if (terrain.bridgeDeckMesh) {
+      this.terrainGroup.add(terrain.bridgeDeckMesh);
+    }
+
     this.terrainGroup.add(grid);
   }
 
   private rebuildObjects(objects: SceneObject[]) {
     disposeChildren(this.objectGroup);
 
-    const modelObjects = objects.filter(object => object.model);
-    const proxyObjects = objects.filter(object => !object.model);
+    const resolvedObjects = objects.map(object => ({
+      ...object,
+      model: this.resolveObjectModel(object),
+    }));
+    const modelObjects = resolvedObjects.filter(object => object.model);
+    const proxyObjects = resolvedObjects.filter(object => !object.model);
 
     if (modelObjects.length > 0 && this.snapshot) {
       const meshes = buildObjectMeshes(
@@ -250,6 +278,18 @@ export class BoardScene {
     }
 
     this.addProps(proxyObjects, enclosedCells);
+  }
+
+  private resolveObjectModel(object: SceneObject) {
+    if (object.model) {
+      return object.model;
+    }
+
+    if (!object.modelKey) {
+      return undefined;
+    }
+
+    return this.objectModelStore.get(object.modelKey);
   }
 
   private collectWallData(objects: SceneObject[]) {

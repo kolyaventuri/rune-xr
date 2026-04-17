@@ -122,6 +122,7 @@ function makeObjectSignature(snapshot: SceneSnapshot) {
     hash = hashOptionalNumber(hash, object.rotationDegrees);
     hash = hashOptionalNumber(hash, object.wallOrientationA);
     hash = hashOptionalNumber(hash, object.wallOrientationB);
+    hash = hashString(hash, object.modelKey ?? '');
     hash = hashModel(hash, object.model);
   }
 
@@ -155,6 +156,7 @@ function hashSurface(hash: number, surface: SceneSnapshot['tiles'][number]['surf
   hash = hashOptionalNumber(hash, surface.shape);
   hash = hashOptionalNumber(hash, surface.renderLevel);
   hash = hashNumber(hash, surface.hasBridge ? 1 : 0);
+  hash = hashOptionalNumber(hash, surface.bridgeHeight);
 
   return hashModel(hash, surface.model);
 }

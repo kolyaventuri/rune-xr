@@ -12,6 +12,7 @@ public record SceneObjectPayload(
     Integer rotationDegrees,
     Integer wallOrientationA,
     Integer wallOrientationB,
+    String modelKey,
     TileSurfaceModelPayload model
 )
 {

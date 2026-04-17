@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
 import {
 	createHelloMessage,
+	createObjectModelBatchMessage,
 	createTextureBatchMessage,
 	parseProtocolMessage,
 	parseSceneSnapshot,
@@ -43,6 +44,26 @@ describe('protocol fixtures', () => {
 		expect(parseProtocolMessage(structuredClone(textureBatch))).toEqual(textureBatch);
 	});
 
+	it('parses object model batch envelopes', () => {
+		const objectModelBatch = createObjectModelBatchMessage([
+			{
+				key: 'model:test',
+				model: {
+					vertices: [
+						{x: 0, y: 0, z: 0},
+						{x: 128, y: 0, z: 0},
+						{x: 0, y: 128, z: 0},
+					],
+					faces: [
+						{a: 0, b: 1, c: 2, rgb: 0x778899},
+					],
+				},
+			},
+		]);
+
+		expect(parseProtocolMessage(structuredClone(objectModelBatch))).toEqual(objectModelBatch);
+	});
+
 	it('rejects malformed scene snapshots', () => {
 		const result = safeParseSceneSnapshot({
 			...sampleSceneSnapshot,
@@ -66,6 +87,7 @@ describe('protocol fixtures', () => {
 						shape: 0,
 						renderLevel: 0,
 						hasBridge: false,
+						bridgeHeight: 24,
 						model: {
 							vertices: [
 								{x: 0, y: 10, z: 0},
@@ -84,6 +106,7 @@ describe('protocol fixtures', () => {
 
 		expect(parsed.tiles[0]?.surface?.rgb).toBe(0x3366cc);
 		expect(parsed.tiles[0]?.surface?.overlayId).toBe(5);
+		expect(parsed.tiles[0]?.surface?.bridgeHeight).toBe(24);
 		expect(parsed.tiles[0]?.surface?.model?.faces[0]?.rgb).toBe(0x3366cc);
 		expect(parsed.tiles[0]?.surface?.model?.faces[0]?.rgbC).toBe(0x4477dd);
 	});
@@ -97,6 +120,7 @@ describe('protocol fixtures', () => {
 					sizeX: 2,
 					sizeY: 3,
 					rotationDegrees: 270,
+					modelKey: 'model:tree',
 				},
 				{
 					...sampleSceneSnapshot.objects[1],
@@ -133,6 +157,7 @@ describe('protocol fixtures', () => {
 
 		expect(parsed.objects[0]?.sizeX).toBe(2);
 		expect(parsed.objects[0]?.rotationDegrees).toBe(270);
+		expect(parsed.objects[0]?.modelKey).toBe('model:tree');
 		expect(parsed.objects[1]?.wallOrientationB).toBe(8);
 		expect(parsed.objects[1]?.model?.faces[0]?.texture).toBe(7);
 		expect(parsed.objects[1]?.model?.faces[0]?.rgbB).toBe(0x00aa00);

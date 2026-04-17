@@ -8,6 +8,7 @@ public record TileSurfacePayload(
     Integer shape,
     Integer renderLevel,
     Boolean hasBridge,
+    Integer bridgeHeight,
     TileSurfaceModelPayload model
 )
 {

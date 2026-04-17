@@ -1,7 +1,7 @@
-import {Color} from 'three';
+import {Color, Texture} from 'three';
 import {describe, expect, it} from 'vitest';
 import type {SceneSnapshot} from '@rune-xr/protocol';
-import {buildTerrainGeometry, buildTexturedTerrainGeometry} from '../render/TerrainMeshBuilder.js';
+import {buildTerrainGeometry, buildTerrainMeshes, buildTexturedTerrainGeometry} from '../render/TerrainMeshBuilder.js';
 
 describe('TerrainMeshBuilder', () => {
   it('builds upward-facing normals for flat terrain quads', () => {
@@ -73,6 +73,87 @@ describe('TerrainMeshBuilder', () => {
     expect(colors.getX(0)).toBeCloseTo(expected.r, 5);
     expect(colors.getY(0)).toBeCloseTo(expected.g, 5);
     expect(colors.getZ(0)).toBeCloseTo(expected.b, 5);
+  });
+
+  it('renders a raised bridge deck above the base terrain', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0, surface: {rgb: 0x3366cc, hasBridge: true, bridgeHeight: 30},
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0, surface: {rgb: 0x3366cc, hasBridge: true, bridgeHeight: 30},
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0, surface: {rgb: 0x3366cc, hasBridge: true, bridgeHeight: 30},
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0, surface: {rgb: 0x3366cc, hasBridge: true, bridgeHeight: 30},
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const terrain = buildTerrainMeshes(snapshot, new Texture());
+    const baseColors = terrain.colorMesh.geometry.getAttribute('color');
+    const basePositions = terrain.colorMesh.geometry.getAttribute('position');
+    const bridgeGeometry = terrain.bridgeDeckMesh?.geometry;
+    const bridgeColors = bridgeGeometry?.getAttribute('color');
+    const bridgePositions = bridgeGeometry?.getAttribute('position');
+    const bridgeColor = new Color('#6f675c');
+    const waterColor = new Color(0x3366cc);
+
+    expect(basePositions.count).toBe(6);
+    expect(basePositions.getY(0)).toBeCloseTo(0, 5);
+    expect(baseColors.getX(0)).toBeCloseTo(waterColor.r, 5);
+    expect(baseColors.getY(0)).toBeCloseTo(waterColor.g, 5);
+    expect(baseColors.getZ(0)).toBeCloseTo(waterColor.b, 5);
+    expect(bridgePositions?.count).toBe(6);
+    expect(bridgePositions?.getY(0)).toBeCloseTo(30 * 0.0025, 5);
+    expect(bridgeColors?.getX(0)).toBeCloseTo(bridgeColor.r, 5);
+    expect(bridgeColors?.getY(0)).toBeCloseTo(bridgeColor.g, 5);
+    expect(bridgeColors?.getZ(0)).toBeCloseTo(bridgeColor.b, 5);
+  });
+
+  it('keeps bridge deck cells at deck height when neighboring corners fall back to river height', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0, surface: {rgb: 0x3366cc, hasBridge: true, bridgeHeight: 30},
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0, surface: {rgb: 0x3366cc},
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0, surface: {rgb: 0x3366cc},
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0, surface: {rgb: 0x3366cc},
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const terrain = buildTerrainMeshes(snapshot, new Texture());
+    const bridgePositions = terrain.bridgeDeckMesh?.geometry.getAttribute('position');
+
+    expect(bridgePositions?.count).toBe(6);
+
+    for (let index = 0; index < (bridgePositions?.count ?? 0); index += 1) {
+      expect(bridgePositions?.getY(index)).toBeCloseTo(30 * 0.0025, 5);
+    }
   });
 
   it('builds textured flat terrain UVs from tile texture ids', () => {

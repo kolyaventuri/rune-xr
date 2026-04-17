@@ -6,10 +6,13 @@ import express from 'express';
 import {
   createAckMessage,
   createErrorMessage,
+  createObjectModelBatchMessage,
   createTextureBatchMessage,
   parseProtocolMessage,
   type AckMessage,
   type HelloMessage,
+  type ObjectModelBatchMessage,
+  type ObjectModelDefinition,
   type ProtocolMessage,
   type SceneSnapshot,
   type SceneSnapshotMessage,
@@ -24,7 +27,15 @@ type ConnectionRole = 'plugin' | 'client' | 'unknown';
 
 type ConnectionState = {
   role: ConnectionRole;
+  source?: string;
+  protocolVersion?: number;
+  messageCount: number;
+  lastMessageKind?: ProtocolMessage['kind'];
+  lastMessageBytes?: number;
+  loggedFirstPayload: boolean;
 };
+
+const MAX_OBJECT_MODEL_BATCH_CHARS = 500_000;
 
 export type BridgeServerOptions = {
   host?: string;
@@ -70,6 +81,49 @@ function resolveStaticRoot(staticRoot?: string) {
   return staticRoot ?? defaultStaticRoot();
 }
 
+function describeSocket(socket: WebSocket) {
+  const state = socketState.get(socket);
+  const role = state?.role ?? 'unknown';
+  const transport = socket as WebSocket & {
+    _socket?: {
+      remoteAddress?: string;
+      remotePort?: number;
+    };
+  };
+  const remoteAddress = transport._socket?.remoteAddress ?? 'unknown';
+  const remotePort = transport._socket?.remotePort ?? 'unknown';
+
+  return `${role} ${remoteAddress}:${remotePort}`;
+}
+
+function describeSocketState(socket: WebSocket) {
+  const state = socketState.get(socket);
+
+  if (!state) {
+    return 'messages=0, lastKind=none, lastBytes=0';
+  }
+
+  return [
+    `messages=${state.messageCount}`,
+    `lastKind=${state.lastMessageKind ?? 'none'}`,
+    `lastBytes=${state.lastMessageBytes ?? 0}`,
+    `source=${state.source ?? 'unknown'}`,
+    `protocolVersion=${state.protocolVersion ?? 'unknown'}`,
+  ].join(', ');
+}
+
+function rawDataSize(data: RawData) {
+  if (typeof data === 'string') {
+    return Buffer.byteLength(data);
+  }
+
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.length, 0);
+  }
+
+  return data instanceof ArrayBuffer ? data.byteLength : data.length;
+}
+
 function parsePayload(data: RawData): ProtocolMessage {
   const payload = JSON.parse(typeof data === 'string' ? data : data.toString());
 
@@ -89,6 +143,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   const server = createServer(app);
   const webSocketServer = new WebSocketServer({server, path: '/ws'});
   const clients = new Set<WebSocket>();
+  const objectModels = new Map<string, ObjectModelDefinition>();
   const textureDefinitions = new Map<number, TextureDefinition>();
   let pluginSocket: WebSocket | undefined;
   let latestSnapshot: SceneSnapshot | undefined;
@@ -138,6 +193,16 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     sendMessage(socket, createTextureBatchMessage([...textureDefinitions.values()]));
   };
 
+  const sendObjectModelReplay = (socket: WebSocket) => {
+    if (objectModels.size === 0) {
+      return;
+    }
+
+    for (const batch of partitionObjectModels([...objectModels.values()])) {
+      sendMessage(socket, createObjectModelBatchMessage(batch));
+    }
+  };
+
   const broadcastTextureBatch = (textures: TextureDefinition[]) => {
     if (textures.length === 0) {
       return;
@@ -147,6 +212,22 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
 
     for (const texture of textures) {
       textureDefinitions.set(texture.id, texture);
+    }
+
+    for (const client of clients) {
+      sendMessage(client, message);
+    }
+  };
+
+  const broadcastObjectModelBatch = (models: ObjectModelDefinition[]) => {
+    if (models.length === 0) {
+      return;
+    }
+
+    const message = createObjectModelBatchMessage(models);
+
+    for (const model of models) {
+      objectModels.set(model.key, model);
     }
 
     for (const client of clients) {
@@ -169,15 +250,29 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
       }
 
       state.role = 'plugin';
+      if (message.source === undefined) {
+        delete state.source;
+      } else {
+        state.source = message.source;
+      }
+      state.protocolVersion = message.protocolVersion;
       pluginSocket = socket;
       sendMessage(socket, createAckMessage('hello', 'plugin_connected'));
-      logger.info('Plugin connected to bridge');
+      logger.info(`Plugin connected to bridge (${describeSocket(socket)}, source=${message.source ?? 'unknown'}, protocolVersion=${message.protocolVersion})`);
       return;
     }
 
     state.role = 'client';
+    if (message.source === undefined) {
+      delete state.source;
+    } else {
+      state.source = message.source;
+    }
+    state.protocolVersion = message.protocolVersion;
     clients.add(socket);
     sendMessage(socket, createAckMessage('hello', 'client_connected'));
+    logger.info(`Client connected to bridge (${describeSocket(socket)}, source=${message.source ?? 'unknown'}, protocolVersion=${message.protocolVersion})`);
+    sendObjectModelReplay(socket);
     sendTextureReplay(socket);
     if (latestSnapshot) {
       broadcastToSocket(socket, latestSnapshot);
@@ -191,16 +286,53 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     });
   };
 
+  const cleanupSocket = (socket: WebSocket) => {
+    const state = socketState.get(socket);
+
+    if (!state) {
+      return;
+    }
+
+    if (state.role === 'plugin' && pluginSocket === socket) {
+      pluginSocket = undefined;
+    }
+
+    if (state.role === 'client') {
+      clients.delete(socket);
+    }
+  };
+
   webSocketServer.on('connection', socket => {
-    socketState.set(socket, {role: 'unknown'});
+    socketState.set(socket, {
+      role: 'unknown',
+      messageCount: 0,
+      loggedFirstPayload: false,
+    });
+    logger.info(`WebSocket connected (${describeSocket(socket)})`);
+
+    socket.on('error', error => {
+      logger.warn(`WebSocket connection error (${describeSocket(socket)}): ${error.message}; ${describeSocketState(socket)}`);
+      cleanupSocket(socket);
+
+      if (socket.readyState === socket.OPEN) {
+        socket.close(1002, 'Protocol error');
+        return;
+      }
+
+      if (socket.readyState !== socket.CLOSED) {
+        socket.terminate();
+      }
+    });
 
     socket.on('message', raw => {
       let message: ProtocolMessage;
+      const payloadBytes = rawDataSize(raw);
 
       try {
         message = parsePayload(raw);
       } catch (error) {
         const detail = error instanceof Error ? error.message : 'Invalid JSON message';
+        logger.warn(`Invalid message received (${describeSocket(socket)}, bytes=${payloadBytes}): ${detail}`);
         sendError(socket, 'invalid_message', detail);
         return;
       }
@@ -215,6 +347,15 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
       if (isHelloMessage(message)) {
         handleHello(socket, message);
         return;
+      }
+
+      state.messageCount += 1;
+      state.lastMessageKind = message.kind;
+      state.lastMessageBytes = payloadBytes;
+
+      if (!state.loggedFirstPayload) {
+        logger.info(`First payload received (${describeSocket(socket)}): kind=${message.kind}, bytes=${payloadBytes}`);
+        state.loggedFirstPayload = true;
       }
 
       if (message.kind === 'ping') {
@@ -238,26 +379,22 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
         return;
       }
 
+      if (message.kind === 'object_model_batch') {
+        const objectModelMessage: ObjectModelBatchMessage = message;
+
+        broadcastObjectModelBatch(objectModelMessage.models);
+        return;
+      }
+
       const sceneMessage: SceneSnapshotMessage = message;
 
       latestSnapshot = sceneMessage.snapshot;
       broadcastSnapshot(sceneMessage.snapshot);
     });
 
-    socket.on('close', () => {
-      const state = socketState.get(socket);
-
-      if (!state) {
-        return;
-      }
-
-      if (state.role === 'plugin' && pluginSocket === socket) {
-        pluginSocket = undefined;
-      }
-
-      if (state.role === 'client') {
-        clients.delete(socket);
-      }
+    socket.on('close', (code, reason) => {
+      logger.info(`WebSocket closed (${describeSocket(socket)}): code=${code}, reason=${reason.toString() || '<empty>'}; ${describeSocketState(socket)}`);
+      cleanupSocket(socket);
     });
   });
 
@@ -288,6 +425,35 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
       await closeServer(server);
     },
   };
+}
+
+function partitionObjectModels(models: ObjectModelDefinition[]) {
+  const batches: ObjectModelDefinition[][] = [];
+  let currentBatch: ObjectModelDefinition[] = [];
+  let currentChars = 0;
+
+  for (const model of models) {
+    const estimatedChars = estimateObjectModelDefinitionChars(model);
+
+    if (currentBatch.length > 0 && currentChars + estimatedChars > MAX_OBJECT_MODEL_BATCH_CHARS) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentChars = 0;
+    }
+
+    currentBatch.push(model);
+    currentChars += estimatedChars;
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+}
+
+function estimateObjectModelDefinitionChars(model: ObjectModelDefinition) {
+  return JSON.stringify(model).length + 64;
 }
 
 async function listen(server: HttpServer, port: number, host: string) {
