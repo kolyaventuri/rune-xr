@@ -5,13 +5,14 @@ import {
   CylinderGeometry,
   GridHelper,
   Group,
+  InstancedMesh,
   MathUtils,
   Mesh,
   MeshStandardMaterial,
+  Object3D,
   OctahedronGeometry,
   SphereGeometry,
   type Matrix4,
-  type Object3D,
 } from 'three';
 import type {ObjectModelDefinition, SceneObject, SceneSnapshot, TextureDefinition} from '@rune-xr/protocol';
 import {ACTOR_HEIGHT, HEIGHT_SCALE, OBJECT_HEIGHT, TILE_WORLD_SIZE} from '../config.js';
@@ -69,6 +70,63 @@ type WallSegment = {
   baseY: number;
 };
 
+type BuildMode = 'idle' | 'inline' | 'worker';
+
+type BuildPhaseStats = {
+  mode: BuildMode;
+  buildMs: number;
+  commitMs: number;
+  totalMs: number;
+  p95Ms: number;
+  completedBuilds: number;
+  staleDrops: number;
+  instancedBatches: number;
+  instancedInstances: number;
+};
+
+type BuildRequestState = {
+  startedAt: number;
+  mode: Exclude<BuildMode, 'idle'>;
+};
+
+type InstanceTransform = {
+  positionX: number;
+  positionY: number;
+  positionZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  rotationY: number;
+};
+
+type ProxyInstanceBatch = {
+  name: string;
+  geometry: BoxGeometry | CylinderGeometry | ConeGeometry | SphereGeometry | OctahedronGeometry;
+  material: MeshStandardMaterial;
+  transforms: InstanceTransform[];
+};
+
+type ProxyInstanceBatches = {
+  wallSegments: ProxyInstanceBatch;
+  wallPosts: ProxyInstanceBatch;
+  buildingFoundations: ProxyInstanceBatch;
+  buildingBodies: ProxyInstanceBatch;
+  buildingRoofs: ProxyInstanceBatch;
+  treeTrunks: ProxyInstanceBatch;
+  treeCanopies: ProxyInstanceBatch;
+  bannerPoles: ProxyInstanceBatch;
+  bannerCloths: ProxyInstanceBatch;
+  groundProps: ProxyInstanceBatch;
+  largePropBases: ProxyInstanceBatch;
+  largePropCanopies: ProxyInstanceBatch;
+  genericProps: ProxyInstanceBatch;
+};
+
+type BuildStats = {
+  terrain: BuildPhaseStats;
+  objects: BuildPhaseStats;
+};
+
 export class BoardScene {
   readonly root = new Group();
   readonly terrainGroup = new Group();
@@ -107,8 +165,19 @@ export class BoardScene {
   };
 
   private readonly actorNodes = new Map<string, Mesh>();
+  private readonly buildStats: BuildStats = {
+    terrain: createBuildPhaseStats(),
+    objects: createBuildPhaseStats(),
+  };
+  private readonly buildSamples = {
+    terrain: [] as number[],
+    objects: [] as number[],
+  };
+  private readonly instanceTransformDummy = new Object3D();
   private readonly meshBuildRunner = createSceneMeshBuildRunner();
   private readonly objectModelStore = new Map<string, NonNullable<SceneObject['model']>>();
+  private readonly pendingObjectBuilds = new Map<number, BuildRequestState>();
+  private readonly pendingTerrainBuilds = new Map<number, BuildRequestState>();
   private readonly terrainTextureAtlas = new TerrainTextureAtlas();
   private heightMap = new Map<string, number>();
   private objectBuildRequestId = 0;
@@ -208,22 +277,32 @@ export class BoardScene {
     };
   }
 
+  getBuildStats() {
+    return {
+      terrain: {...this.buildStats.terrain},
+      objects: {...this.buildStats.objects},
+    };
+  }
+
   private rebuildTerrain(snapshot: SceneSnapshot) {
     const requestId = this.terrainBuildRequestId + 1;
+    const startedAt = performance.now();
 
     this.terrainBuildRequestId = requestId;
 
     const maybeBuild = this.meshBuildRunner.buildTerrain(toSceneMeshSnapshot(snapshot));
 
     if (isPromiseLike(maybeBuild)) {
+      this.pendingTerrainBuilds.set(requestId, {startedAt, mode: 'worker'});
       void maybeBuild.then(data => {
         this.commitTerrainRebuild(requestId, snapshot, data);
       }).catch(error => {
-        console.error('Terrain rebuild failed.', error);
+        this.handleBuildFailure(this.pendingTerrainBuilds, requestId, 'Terrain rebuild', error);
       });
       return;
     }
 
+    this.pendingTerrainBuilds.set(requestId, {startedAt, mode: 'inline'});
     this.commitTerrainRebuild(requestId, snapshot, maybeBuild);
   }
 
@@ -234,10 +313,12 @@ export class BoardScene {
     }));
     const modelObjects = resolvedObjects.filter(object => object.model);
     const requestId = this.objectBuildRequestId + 1;
+    const startedAt = performance.now();
 
     this.objectBuildRequestId = requestId;
 
     if (!this.snapshot) {
+      this.pendingObjectBuilds.set(requestId, {startedAt, mode: 'inline'});
       this.commitObjectRebuild(requestId, resolvedObjects, {textured: []});
       return;
     }
@@ -249,21 +330,35 @@ export class BoardScene {
     );
 
     if (isPromiseLike(maybeBuild)) {
+      this.pendingObjectBuilds.set(requestId, {startedAt, mode: 'worker'});
       void maybeBuild.then(data => {
         this.commitObjectRebuild(requestId, resolvedObjects, data);
       }).catch(error => {
-        console.error('Object rebuild failed.', error);
+        this.handleBuildFailure(this.pendingObjectBuilds, requestId, 'Object rebuild', error);
       });
       return;
     }
 
+    this.pendingObjectBuilds.set(requestId, {startedAt, mode: 'inline'});
     this.commitObjectRebuild(requestId, resolvedObjects, maybeBuild);
   }
 
   private commitTerrainRebuild(requestId: number, snapshot: SceneSnapshot, data: TerrainMeshBuildData) {
-    if (requestId !== this.terrainBuildRequestId) {
+    const request = this.pendingTerrainBuilds.get(requestId);
+
+    if (!request) {
       return;
     }
+
+    this.pendingTerrainBuilds.delete(requestId);
+
+    if (requestId !== this.terrainBuildRequestId) {
+      this.buildStats.terrain.staleDrops += 1;
+      return;
+    }
+
+    const commitStartedAt = performance.now();
+    const buildMs = commitStartedAt - request.startedAt;
 
     this.terrainBuildCount += 1;
     disposeChildren(this.terrainGroup);
@@ -296,12 +391,31 @@ export class BoardScene {
     }
 
     this.terrainGroup.add(grid);
+    recordBuildPhaseStats(
+      this.buildStats.terrain,
+      this.buildSamples.terrain,
+      request.mode,
+      buildMs,
+      performance.now() - commitStartedAt,
+    );
   }
 
   private commitObjectRebuild(requestId: number, resolvedObjects: SceneObject[], data: ObjectMeshBuildData) {
-    if (requestId !== this.objectBuildRequestId) {
+    const request = this.pendingObjectBuilds.get(requestId);
+
+    if (!request) {
       return;
     }
+
+    this.pendingObjectBuilds.delete(requestId);
+
+    if (requestId !== this.objectBuildRequestId) {
+      this.buildStats.objects.staleDrops += 1;
+      return;
+    }
+
+    const commitStartedAt = performance.now();
+    const buildMs = commitStartedAt - request.startedAt;
 
     disposeChildren(this.objectGroup);
 
@@ -321,8 +435,9 @@ export class BoardScene {
     const proxyObjects = resolvedObjects.filter(object => !object.model);
     const {segments, enclosedRegions} = this.collectWallData(proxyObjects);
     const enclosedCells = new Set<string>();
+    const proxyBatches = this.createProxyInstanceBatches();
 
-    this.addWallSegments(segments);
+    this.addWallSegments(segments, proxyBatches);
 
     for (const region of enclosedRegions) {
       for (const cell of region) {
@@ -330,11 +445,21 @@ export class BoardScene {
       }
 
       for (const rectangle of decomposeRegion(region)) {
-        this.addBuildingRectangle(rectangle);
+        this.addBuildingRectangle(rectangle, proxyBatches);
       }
     }
 
-    this.addProps(proxyObjects, enclosedCells);
+    this.addProps(proxyObjects, enclosedCells, proxyBatches);
+    const proxyBatchStats = this.flushProxyInstanceBatches(proxyBatches);
+
+    recordBuildPhaseStats(
+      this.buildStats.objects,
+      this.buildSamples.objects,
+      request.mode,
+      buildMs,
+      performance.now() - commitStartedAt,
+      proxyBatchStats,
+    );
   }
 
   private resolveObjectModel(object: SceneObject) {
@@ -416,19 +541,19 @@ export class BoardScene {
     };
   }
 
-  private addWallSegments(segments: WallSegment[]) {
+  private addWallSegments(segments: WallSegment[], batches: ProxyInstanceBatches) {
     const cornerKeys = new Set<string>();
 
     for (const segment of segments) {
-      const wall = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.wall, 'wall-segment');
-      wall.scale.set(segment.length, WALL_HEIGHT, WALL_THICKNESS);
-      wall.position.set(
-        segment.midpointX,
-        segment.baseY + WALL_HEIGHT / 2,
-        segment.midpointZ,
-      );
-      wall.rotation.y = segment.rotationY;
-      this.objectGroup.add(wall);
+      pushInstanceTransform(batches.wallSegments, {
+        positionX: segment.midpointX,
+        positionY: segment.baseY + WALL_HEIGHT / 2,
+        positionZ: segment.midpointZ,
+        scaleX: segment.length,
+        scaleY: WALL_HEIGHT,
+        scaleZ: WALL_THICKNESS,
+        rotationY: segment.rotationY,
+      });
 
       cornerKeys.add(cornerKey(segment.start.x, segment.start.y));
       cornerKeys.add(cornerKey(segment.end.x, segment.end.y));
@@ -436,14 +561,15 @@ export class BoardScene {
 
     for (const key of cornerKeys) {
       const [cornerX, cornerY] = parseCornerKey(key);
-      const post = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.wallPost, 'wall-post');
-      post.scale.set(WALL_POST_SIZE, WALL_HEIGHT * 1.05, WALL_POST_SIZE);
-      post.position.set(
-        this.edgeX(cornerX),
-        this.cornerHeightWorld(cornerX, cornerY) + WALL_HEIGHT * 0.525 + OBJECT_BASE_OFFSET,
-        this.edgeZ(cornerY),
-      );
-      this.objectGroup.add(post);
+      pushInstanceTransform(batches.wallPosts, {
+        positionX: this.edgeX(cornerX),
+        positionY: this.cornerHeightWorld(cornerX, cornerY) + WALL_HEIGHT * 0.525 + OBJECT_BASE_OFFSET,
+        positionZ: this.edgeZ(cornerY),
+        scaleX: WALL_POST_SIZE,
+        scaleY: WALL_HEIGHT * 1.05,
+        scaleZ: WALL_POST_SIZE,
+        rotationY: 0,
+      });
     }
   }
 
@@ -531,7 +657,7 @@ export class BoardScene {
     return false;
   }
 
-  private addBuildingRectangle(rectangle: Rectangle) {
+  private addBuildingRectangle(rectangle: Rectangle, batches: ProxyInstanceBatches) {
     const west = this.edgeX(rectangle.minX) + BUILDING_INSET;
     const east = this.edgeX(rectangle.maxX + 1) - BUILDING_INSET;
     const north = this.edgeZ(rectangle.maxY + 1) + BUILDING_INSET;
@@ -547,36 +673,38 @@ export class BoardScene {
     const centerZ = (north + south) / 2;
     const baseY = this.maxTileHeightWorld(rectangle) + OBJECT_BASE_OFFSET;
 
-    const foundation = this.createSharedMesh(
-      this.sharedGeometries.box,
-      this.objectMaterials.buildingFoundation,
-      'building-foundation',
-    );
-    foundation.scale.set(width, BUILDING_FOUNDATION_HEIGHT, depth);
-    foundation.position.set(centerX, baseY + BUILDING_FOUNDATION_HEIGHT / 2, centerZ);
-    this.objectGroup.add(foundation);
+    pushInstanceTransform(batches.buildingFoundations, {
+      positionX: centerX,
+      positionY: baseY + BUILDING_FOUNDATION_HEIGHT / 2,
+      positionZ: centerZ,
+      scaleX: width,
+      scaleY: BUILDING_FOUNDATION_HEIGHT,
+      scaleZ: depth,
+      rotationY: 0,
+    });
 
-    const body = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.buildingBody, 'building-body');
-    body.scale.set(width, BUILDING_BODY_HEIGHT, depth);
-    body.position.set(
-      centerX,
-      baseY + BUILDING_FOUNDATION_HEIGHT + BUILDING_BODY_HEIGHT / 2,
-      centerZ,
-    );
-    this.objectGroup.add(body);
+    pushInstanceTransform(batches.buildingBodies, {
+      positionX: centerX,
+      positionY: baseY + BUILDING_FOUNDATION_HEIGHT + BUILDING_BODY_HEIGHT / 2,
+      positionZ: centerZ,
+      scaleX: width,
+      scaleY: BUILDING_BODY_HEIGHT,
+      scaleZ: depth,
+      rotationY: 0,
+    });
 
-    const roof = this.createSharedMesh(this.sharedGeometries.pyramid, this.objectMaterials.roof, 'building-roof');
-    roof.scale.set(width + ROOF_OVERHANG, BUILDING_ROOF_HEIGHT, depth + ROOF_OVERHANG);
-    roof.position.set(
-      centerX,
-      baseY + BUILDING_FOUNDATION_HEIGHT + BUILDING_BODY_HEIGHT + BUILDING_ROOF_HEIGHT / 2,
-      centerZ,
-    );
-    roof.rotation.y = Math.PI / 4;
-    this.objectGroup.add(roof);
+    pushInstanceTransform(batches.buildingRoofs, {
+      positionX: centerX,
+      positionY: baseY + BUILDING_FOUNDATION_HEIGHT + BUILDING_BODY_HEIGHT + BUILDING_ROOF_HEIGHT / 2,
+      positionZ: centerZ,
+      scaleX: width + ROOF_OVERHANG,
+      scaleY: BUILDING_ROOF_HEIGHT,
+      scaleZ: depth + ROOF_OVERHANG,
+      rotationY: Math.PI / 4,
+    });
   }
 
-  private addProps(objects: SceneObject[], enclosedCells: Set<string>) {
+  private addProps(objects: SceneObject[], enclosedCells: Set<string>, batches: ProxyInstanceBatches) {
     for (const object of objects) {
       if (object.kind === 'wall') {
         continue;
@@ -593,75 +721,99 @@ export class BoardScene {
       }
 
       if (object.kind === 'game' && normalizedName.includes('tree')) {
-        this.addTree(object);
+        this.addTree(object, batches);
         continue;
       }
 
       if (object.kind === 'decor' && normalizedName.includes('banner')) {
-        this.addBanner(object);
+        this.addBanner(object, batches);
         continue;
       }
 
       if (object.kind === 'ground') {
-        this.addGroundProp(object);
+        this.addGroundProp(object, batches);
         continue;
       }
 
       if (object.kind === 'game' && ((object.sizeX ?? 1) > 1 || (object.sizeY ?? 1) > 1 || normalizedName.includes('stall'))) {
-        this.addLargeProp(object);
+        this.addLargeProp(object, batches);
         continue;
       }
 
-      this.addGenericProp(object);
+      this.addGenericProp(object, batches);
     }
   }
 
-  private addTree(object: SceneObject) {
+  private addTree(object: SceneObject, batches: ProxyInstanceBatches) {
     const baseY = this.tileHeightWorld(object.x, object.y) + OBJECT_BASE_OFFSET;
     const centerX = this.tileCenterX(object.x);
     const centerZ = this.tileCenterZ(object.y);
     const trunkHeight = OBJECT_HEIGHT * 1.2;
     const canopyHeight = OBJECT_HEIGHT * 1.8;
 
-    const trunk = this.createSharedMesh(this.sharedGeometries.cylinder, this.objectMaterials.treeTrunk, 'object-tree-trunk');
-    trunk.scale.set(TILE_WORLD_SIZE * 0.18, trunkHeight, TILE_WORLD_SIZE * 0.18);
-    trunk.position.set(centerX, baseY + trunkHeight / 2, centerZ);
-    this.objectGroup.add(trunk);
+    pushInstanceTransform(batches.treeTrunks, {
+      positionX: centerX,
+      positionY: baseY + trunkHeight / 2,
+      positionZ: centerZ,
+      scaleX: TILE_WORLD_SIZE * 0.18,
+      scaleY: trunkHeight,
+      scaleZ: TILE_WORLD_SIZE * 0.18,
+      rotationY: 0,
+    });
 
-    const canopy = this.createSharedMesh(this.sharedGeometries.cone, this.objectMaterials.treeCanopy, 'object-tree-canopy');
-    canopy.scale.set(TILE_WORLD_SIZE * 0.82, canopyHeight, TILE_WORLD_SIZE * 0.82);
-    canopy.position.set(centerX, baseY + trunkHeight + canopyHeight / 2 - OBJECT_HEIGHT * 0.12, centerZ);
-    canopy.rotation.y = MathUtils.degToRad(normalizedRotationDegrees(object));
-    this.objectGroup.add(canopy);
+    pushInstanceTransform(batches.treeCanopies, {
+      positionX: centerX,
+      positionY: baseY + trunkHeight + canopyHeight / 2 - OBJECT_HEIGHT * 0.12,
+      positionZ: centerZ,
+      scaleX: TILE_WORLD_SIZE * 0.82,
+      scaleY: canopyHeight,
+      scaleZ: TILE_WORLD_SIZE * 0.82,
+      rotationY: MathUtils.degToRad(normalizedRotationDegrees(object)),
+    });
   }
 
-  private addBanner(object: SceneObject) {
+  private addBanner(object: SceneObject, batches: ProxyInstanceBatches) {
     const baseY = this.tileHeightWorld(object.x, object.y) + OBJECT_BASE_OFFSET;
     const centerX = this.tileCenterX(object.x);
     const centerZ = this.tileCenterZ(object.y);
     const rotationY = MathUtils.degToRad(normalizedRotationDegrees(object));
 
-    const pole = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.wallPost, 'object-banner-pole');
-    pole.scale.set(TILE_WORLD_SIZE * 0.08, OBJECT_HEIGHT * 1.8, TILE_WORLD_SIZE * 0.08);
-    pole.position.set(centerX, baseY + OBJECT_HEIGHT * 0.9, centerZ);
-    this.objectGroup.add(pole);
+    pushInstanceTransform(batches.bannerPoles, {
+      positionX: centerX,
+      positionY: baseY + OBJECT_HEIGHT * 0.9,
+      positionZ: centerZ,
+      scaleX: TILE_WORLD_SIZE * 0.08,
+      scaleY: OBJECT_HEIGHT * 1.8,
+      scaleZ: TILE_WORLD_SIZE * 0.08,
+      rotationY: 0,
+    });
 
-    const cloth = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.decor, 'object-banner-cloth');
-    cloth.scale.set(TILE_WORLD_SIZE * 0.46, OBJECT_HEIGHT * 0.72, TILE_WORLD_SIZE * 0.06);
-    cloth.position.set(centerX + TILE_WORLD_SIZE * 0.18, baseY + OBJECT_HEIGHT * 1.1, centerZ);
-    cloth.rotation.y = rotationY;
-    this.objectGroup.add(cloth);
+    pushInstanceTransform(batches.bannerCloths, {
+      positionX: centerX + TILE_WORLD_SIZE * 0.18,
+      positionY: baseY + OBJECT_HEIGHT * 1.1,
+      positionZ: centerZ,
+      scaleX: TILE_WORLD_SIZE * 0.46,
+      scaleY: OBJECT_HEIGHT * 0.72,
+      scaleZ: TILE_WORLD_SIZE * 0.06,
+      rotationY,
+    });
   }
 
-  private addGroundProp(object: SceneObject) {
+  private addGroundProp(object: SceneObject, batches: ProxyInstanceBatches) {
     const baseY = this.tileHeightWorld(object.x, object.y) + OBJECT_BASE_OFFSET;
-    const prop = this.createSharedMesh(this.sharedGeometries.sphere, this.objectMaterials.ground, 'object-ground');
-    prop.scale.set(TILE_WORLD_SIZE * 0.42, OBJECT_HEIGHT * 0.55, TILE_WORLD_SIZE * 0.42);
-    prop.position.set(this.tileCenterX(object.x), baseY + OBJECT_HEIGHT * 0.24, this.tileCenterZ(object.y));
-    this.objectGroup.add(prop);
+
+    pushInstanceTransform(batches.groundProps, {
+      positionX: this.tileCenterX(object.x),
+      positionY: baseY + OBJECT_HEIGHT * 0.24,
+      positionZ: this.tileCenterZ(object.y),
+      scaleX: TILE_WORLD_SIZE * 0.42,
+      scaleY: OBJECT_HEIGHT * 0.55,
+      scaleZ: TILE_WORLD_SIZE * 0.42,
+      rotationY: 0,
+    });
   }
 
-  private addLargeProp(object: SceneObject) {
+  private addLargeProp(object: SceneObject, batches: ProxyInstanceBatches) {
     const baseY = this.tileHeightWorld(object.x, object.y) + OBJECT_BASE_OFFSET;
     const centerX = this.tileCenterX(object.x);
     const centerZ = this.tileCenterZ(object.y);
@@ -669,42 +821,107 @@ export class BoardScene {
     const depth = Math.max((object.sizeY ?? 1) * TILE_WORLD_SIZE * 0.72, TILE_WORLD_SIZE * 0.52);
     const rotationY = MathUtils.degToRad(normalizedRotationDegrees(object));
 
-    const base = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.prop, 'object-large-base');
-    base.scale.set(width, OBJECT_HEIGHT * 0.42, depth);
-    base.position.set(centerX, baseY + OBJECT_HEIGHT * 0.21, centerZ);
-    base.rotation.y = rotationY;
-    this.objectGroup.add(base);
+    pushInstanceTransform(batches.largePropBases, {
+      positionX: centerX,
+      positionY: baseY + OBJECT_HEIGHT * 0.21,
+      positionZ: centerZ,
+      scaleX: width,
+      scaleY: OBJECT_HEIGHT * 0.42,
+      scaleZ: depth,
+      rotationY,
+    });
 
-    const canopy = this.createSharedMesh(this.sharedGeometries.box, this.objectMaterials.propAccent, 'object-large-canopy');
-    canopy.scale.set(width + TILE_WORLD_SIZE * 0.08, OBJECT_HEIGHT * 0.18, depth + TILE_WORLD_SIZE * 0.08);
-    canopy.position.set(centerX, baseY + OBJECT_HEIGHT * 0.82, centerZ);
-    canopy.rotation.y = rotationY;
-    this.objectGroup.add(canopy);
+    pushInstanceTransform(batches.largePropCanopies, {
+      positionX: centerX,
+      positionY: baseY + OBJECT_HEIGHT * 0.82,
+      positionZ: centerZ,
+      scaleX: width + TILE_WORLD_SIZE * 0.08,
+      scaleY: OBJECT_HEIGHT * 0.18,
+      scaleZ: depth + TILE_WORLD_SIZE * 0.08,
+      rotationY,
+    });
   }
 
-  private addGenericProp(object: SceneObject) {
+  private addGenericProp(object: SceneObject, batches: ProxyInstanceBatches) {
     const baseY = this.tileHeightWorld(object.x, object.y) + OBJECT_BASE_OFFSET;
     const width = Math.max((object.sizeX ?? 1) * TILE_WORLD_SIZE * 0.42, TILE_WORLD_SIZE * 0.32);
     const depth = Math.max((object.sizeY ?? 1) * TILE_WORLD_SIZE * 0.42, TILE_WORLD_SIZE * 0.32);
-    const prop = this.createSharedMesh(this.sharedGeometries.crystal, this.objectMaterials.prop, 'object-generic');
-    prop.scale.set(width, OBJECT_HEIGHT * 0.82, depth);
-    prop.position.set(this.tileCenterX(object.x), baseY + OBJECT_HEIGHT * 0.4, this.tileCenterZ(object.y));
-    prop.rotation.y = MathUtils.degToRad(normalizedRotationDegrees(object));
-    this.objectGroup.add(prop);
+    pushInstanceTransform(batches.genericProps, {
+      positionX: this.tileCenterX(object.x),
+      positionY: baseY + OBJECT_HEIGHT * 0.4,
+      positionZ: this.tileCenterZ(object.y),
+      scaleX: width,
+      scaleY: OBJECT_HEIGHT * 0.82,
+      scaleZ: depth,
+      rotationY: MathUtils.degToRad(normalizedRotationDegrees(object)),
+    });
   }
 
-  private createSharedMesh(
-    geometry: BoxGeometry | CylinderGeometry | ConeGeometry | SphereGeometry | OctahedronGeometry,
-    material: MeshStandardMaterial,
-    name: string,
+  private createProxyInstanceBatches(): ProxyInstanceBatches {
+    return {
+      wallSegments: createProxyInstanceBatch('wall-segment', this.sharedGeometries.box, this.objectMaterials.wall),
+      wallPosts: createProxyInstanceBatch('wall-post', this.sharedGeometries.box, this.objectMaterials.wallPost),
+      buildingFoundations: createProxyInstanceBatch('building-foundation', this.sharedGeometries.box, this.objectMaterials.buildingFoundation),
+      buildingBodies: createProxyInstanceBatch('building-body', this.sharedGeometries.box, this.objectMaterials.buildingBody),
+      buildingRoofs: createProxyInstanceBatch('building-roof', this.sharedGeometries.pyramid, this.objectMaterials.roof),
+      treeTrunks: createProxyInstanceBatch('object-tree-trunk', this.sharedGeometries.cylinder, this.objectMaterials.treeTrunk),
+      treeCanopies: createProxyInstanceBatch('object-tree-canopy', this.sharedGeometries.cone, this.objectMaterials.treeCanopy),
+      bannerPoles: createProxyInstanceBatch('object-banner-pole', this.sharedGeometries.box, this.objectMaterials.wallPost),
+      bannerCloths: createProxyInstanceBatch('object-banner-cloth', this.sharedGeometries.box, this.objectMaterials.decor),
+      groundProps: createProxyInstanceBatch('object-ground', this.sharedGeometries.sphere, this.objectMaterials.ground),
+      largePropBases: createProxyInstanceBatch('object-large-base', this.sharedGeometries.box, this.objectMaterials.prop),
+      largePropCanopies: createProxyInstanceBatch('object-large-canopy', this.sharedGeometries.box, this.objectMaterials.propAccent),
+      genericProps: createProxyInstanceBatch('object-generic', this.sharedGeometries.crystal, this.objectMaterials.prop),
+    };
+  }
+
+  private flushProxyInstanceBatches(batches: ProxyInstanceBatches) {
+    let batchCount = 0;
+    let instanceCount = 0;
+
+    for (const batch of Object.values(batches)) {
+      if (batch.transforms.length === 0) {
+        continue;
+      }
+
+      const mesh = new InstancedMesh(batch.geometry, batch.material, batch.transforms.length);
+
+      mesh.name = batch.name;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.disposeGeometry = false;
+      mesh.userData.disposeMaterial = false;
+      mesh.userData.instanceCount = batch.transforms.length;
+
+      for (const [index, transform] of batch.transforms.entries()) {
+        this.applyInstanceTransform(mesh, index, transform);
+      }
+
+      mesh.instanceMatrix.needsUpdate = true;
+      this.objectGroup.add(mesh);
+      batchCount += 1;
+      instanceCount += batch.transforms.length;
+    }
+
+    return {instancedBatches: batchCount, instancedInstances: instanceCount};
+  }
+
+  private applyInstanceTransform(mesh: InstancedMesh, index: number, transform: InstanceTransform) {
+    this.instanceTransformDummy.position.set(transform.positionX, transform.positionY, transform.positionZ);
+    this.instanceTransformDummy.rotation.set(0, transform.rotationY, 0);
+    this.instanceTransformDummy.scale.set(transform.scaleX, transform.scaleY, transform.scaleZ);
+    this.instanceTransformDummy.updateMatrix();
+    mesh.setMatrixAt(index, this.instanceTransformDummy.matrix);
+  }
+
+  private handleBuildFailure(
+    pendingRequests: Map<number, BuildRequestState>,
+    requestId: number,
+    label: string,
+    error: unknown,
   ) {
-    const mesh = new Mesh(geometry, material);
-    mesh.name = name;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.userData.disposeGeometry = false;
-    mesh.userData.disposeMaterial = false;
-    return mesh;
+    pendingRequests.delete(requestId);
+    console.error(`${label} failed.`, error);
   }
 
   private tileCenterX(worldX: number) {
@@ -1005,6 +1222,72 @@ function isPromiseLike<T>(value: Promise<T> | T): value is Promise<T> {
     && value !== null
     && 'then' in value
     && typeof value.then === 'function';
+}
+
+function createBuildPhaseStats(): BuildPhaseStats {
+  return {
+    mode: 'idle',
+    buildMs: 0,
+    commitMs: 0,
+    totalMs: 0,
+    p95Ms: 0,
+    completedBuilds: 0,
+    staleDrops: 0,
+    instancedBatches: 0,
+    instancedInstances: 0,
+  };
+}
+
+function recordBuildPhaseStats(
+  stats: BuildPhaseStats,
+  samples: number[],
+  mode: Exclude<BuildMode, 'idle'>,
+  buildMs: number,
+  commitMs: number,
+  extras?: Partial<Pick<BuildPhaseStats, 'instancedBatches' | 'instancedInstances'>>,
+) {
+  stats.mode = mode;
+  stats.buildMs = buildMs;
+  stats.commitMs = commitMs;
+  stats.totalMs = buildMs + commitMs;
+  stats.completedBuilds += 1;
+  samples.push(stats.totalMs);
+
+  if (samples.length > 48) {
+    samples.shift();
+  }
+
+  stats.p95Ms = calculateP95(samples);
+  stats.instancedBatches = extras?.instancedBatches ?? 0;
+  stats.instancedInstances = extras?.instancedInstances ?? 0;
+}
+
+function createProxyInstanceBatch(
+  name: string,
+  geometry: BoxGeometry | CylinderGeometry | ConeGeometry | SphereGeometry | OctahedronGeometry,
+  material: MeshStandardMaterial,
+): ProxyInstanceBatch {
+  return {
+    name,
+    geometry,
+    material,
+    transforms: [],
+  };
+}
+
+function pushInstanceTransform(batch: ProxyInstanceBatch, transform: InstanceTransform) {
+  batch.transforms.push(transform);
+}
+
+function calculateP95(samples: number[]) {
+  if (samples.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
+
+  return sorted[index] ?? 0;
 }
 
 function applyTransparency(material: GridHelper['material']) {

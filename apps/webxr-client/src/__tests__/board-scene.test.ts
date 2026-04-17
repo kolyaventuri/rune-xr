@@ -124,8 +124,9 @@ describe('BoardScene', () => {
 
     board.applySnapshot(sampleSceneSnapshot, {terrainChanged: true, objectsChanged: true});
 
-    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBeGreaterThanOrEqual(8);
-    expect(countNamedChildren(board.objectGroup.children, 'building-roof')).toBe(1);
+    expect(countNamedInstances(board.objectGroup.children, 'wall-segment')).toBeGreaterThanOrEqual(8);
+    expect(countNamedInstances(board.objectGroup.children, 'building-roof')).toBe(1);
+    expect(board.getBuildStats().objects.instancedBatches).toBeGreaterThan(0);
   });
 
   it('renders model-backed objects instead of proxy wall geometry', () => {
@@ -185,7 +186,7 @@ describe('BoardScene', () => {
     expect(colorMesh).toBeInstanceOf(Mesh);
     expect((colorMesh as Mesh).geometry.getAttribute('position').count).toBe(3);
     expect(texturedMesh).toBeUndefined();
-    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBe(0);
+    expect(countNamedInstances(board.objectGroup.children, 'wall-segment')).toBe(0);
   });
 
   it('rebuilds proxy objects when referenced model batches arrive', () => {
@@ -218,7 +219,7 @@ describe('BoardScene', () => {
 
     board.applySnapshot(snapshot, {terrainChanged: true, objectsChanged: true});
 
-    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBeGreaterThan(0);
+    expect(countNamedInstances(board.objectGroup.children, 'wall-segment')).toBeGreaterThan(0);
 
     board.applyObjectModelBatch([
       {
@@ -251,7 +252,7 @@ describe('BoardScene', () => {
     const colorMesh = board.objectGroup.children.find(child => child.name === 'object-color');
 
     expect(colorMesh).toBeInstanceOf(Mesh);
-    expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBe(0);
+    expect(countNamedInstances(board.objectGroup.children, 'wall-segment')).toBe(0);
   });
 
   it('preserves per-vertex object face colors', () => {
@@ -307,6 +308,12 @@ describe('BoardScene', () => {
   });
 });
 
-function countNamedChildren(children: Object3D[], name: string) {
-  return children.filter(child => child.name === name).length;
+function countNamedInstances(children: Object3D[], name: string) {
+  return children
+    .filter(child => child.name === name)
+    .reduce((total, child) => total + resolveInstanceCount(child), 0);
+}
+
+function resolveInstanceCount(child: Object3D) {
+  return typeof child.userData.instanceCount === 'number' ? child.userData.instanceCount : 1;
 }

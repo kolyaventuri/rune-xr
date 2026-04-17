@@ -74,6 +74,14 @@ root.innerHTML = `
           <span class="metric-label">Object Textures</span>
           <span class="metric-value" data-wall-texture-status>--</span>
         </article>
+        <article class="metric">
+          <span class="metric-label">Terrain Build</span>
+          <span class="metric-value" data-terrain-build-status>Awaiting rebuild</span>
+        </article>
+        <article class="metric">
+          <span class="metric-label">Object Build</span>
+          <span class="metric-value" data-object-build-status>Awaiting rebuild</span>
+        </article>
       </div>
       <div class="texture-preview-grid" data-object-texture-previews hidden></div>
       <div class="actions">
@@ -99,6 +107,8 @@ const frameTimeStatus = root.querySelector<HTMLElement>('[data-frame-time-status
 const toggleHudButton = root.querySelector<HTMLButtonElement>('[data-toggle-hud]');
 const bridgeStatus = root.querySelector<HTMLElement>('[data-bridge-status]');
 const snapshotStatus = root.querySelector<HTMLElement>('[data-snapshot-status]');
+const terrainBuildStatus = root.querySelector<HTMLElement>('[data-terrain-build-status]');
+const objectBuildStatus = root.querySelector<HTMLElement>('[data-object-build-status]');
 const wallTextureStatus = root.querySelector<HTMLElement>('[data-wall-texture-status]');
 const objectTexturePreviews = root.querySelector<HTMLElement>('[data-object-texture-previews]');
 const arHint = root.querySelector<HTMLElement>('[data-ar-hint]');
@@ -114,6 +124,8 @@ if (
   || !toggleHudButton
   || !bridgeStatus
   || !snapshotStatus
+  || !terrainBuildStatus
+  || !objectBuildStatus
   || !wallTextureStatus
   || !objectTexturePreviews
   || !arHint
@@ -128,6 +140,8 @@ const perfBadgeElement = perfBadge;
 const fpsStatusElement = fpsStatus;
 const frameTimeStatusElement = frameTimeStatus;
 const hudToggleButton = toggleHudButton;
+const terrainBuildStatusElement = terrainBuildStatus;
+const objectBuildStatusElement = objectBuildStatus;
 const wallTextureStatusElement = wallTextureStatus;
 const objectTexturePreviewsElement = objectTexturePreviews;
 const fpsTracker = createFpsTracker();
@@ -233,6 +247,7 @@ renderer.setAnimationLoop((time, frame) => {
 
   updatePreviewCameraRotation(deltaSeconds);
   controls.update();
+  renderBuildStats(boardScene.getBuildStats());
   renderer.render(scene, camera);
 });
 
@@ -518,6 +533,33 @@ function renderPerformanceStats(fps: number, frameTimeMs: number) {
   fpsStatusElement.textContent = `${Math.round(fps)}`;
   frameTimeStatusElement.textContent = `${frameTimeMs.toFixed(1)} ms`;
   perfBadgeElement.dataset.perfTier = resolvePerformanceTier(fps);
+}
+
+function renderBuildStats(stats: ReturnType<BoardScene['getBuildStats']>) {
+  terrainBuildStatusElement.textContent = formatBuildStats(stats.terrain);
+  objectBuildStatusElement.textContent = formatBuildStats(stats.objects, {showInstancing: true});
+}
+
+function formatBuildStats(
+  stats: ReturnType<BoardScene['getBuildStats']>['terrain'],
+  options?: {showInstancing?: boolean},
+) {
+  if (stats.mode === 'idle' || stats.completedBuilds === 0) {
+    return 'Awaiting rebuild';
+  }
+
+  const lines = [
+    `${stats.mode} ${stats.buildMs.toFixed(1)} ms`,
+    `commit ${stats.commitMs.toFixed(1)} ms`,
+    `p95 ${stats.p95Ms.toFixed(1)} ms`,
+    `drops ${stats.staleDrops}`,
+  ];
+
+  if (options?.showInstancing) {
+    lines.push(`inst ${stats.instancedBatches}/${stats.instancedInstances}`);
+  }
+
+  return lines.join('\n');
 }
 
 function resolvePerformanceTier(fps: number) {
