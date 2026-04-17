@@ -119,6 +119,9 @@ class SceneExtractorTest
         assertEquals(1, payload.faces().get(0).b());
         assertEquals(2, payload.faces().get(0).c());
         assertNull(payload.faces().get(0).rgb());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbA());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbB());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbC());
         assertEquals(0, payload.faces().get(0).texture());
     }
 }

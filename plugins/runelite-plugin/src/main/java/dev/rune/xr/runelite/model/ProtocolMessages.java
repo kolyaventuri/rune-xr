@@ -1,5 +1,7 @@
 package dev.rune.xr.runelite.model;
 
+import java.util.List;
+
 public final class ProtocolMessages
 {
     public static final int VERSION = 1;
@@ -24,11 +26,11 @@ public final class ProtocolMessages
         }
     }
 
-    public record TextureBatchMessage(String kind, TextureBatchPayload textures)
+    public record TextureBatchMessage(String kind, List<TextureDefinitionPayload> textures)
     {
         public static TextureBatchMessage fromTextures(TextureBatchPayload textures)
         {
-            return new TextureBatchMessage("texture_batch", textures);
+            return new TextureBatchMessage("texture_batch", textures.textures());
         }
     }
 }

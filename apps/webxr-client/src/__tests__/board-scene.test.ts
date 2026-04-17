@@ -184,8 +184,60 @@ describe('BoardScene', () => {
 
     expect(colorMesh).toBeInstanceOf(Mesh);
     expect((colorMesh as Mesh).geometry.getAttribute('position').count).toBe(3);
-    expect(texturedMesh).toBeInstanceOf(Mesh);
+    expect(texturedMesh).toBeUndefined();
     expect(countNamedChildren(board.objectGroup.children, 'wall-segment')).toBe(0);
+  });
+
+  it('preserves per-vertex object face colors', () => {
+    const board = new BoardScene();
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [
+        {
+          id: 'wall_colors',
+          kind: 'wall',
+          name: 'Castle wall',
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          model: {
+            vertices: [
+              {x: 0, y: 0, z: 0},
+              {x: 128, y: 0, z: 0},
+              {x: 0, y: 128, z: 0},
+            ],
+            faces: [
+              {
+                a: 0,
+                b: 1,
+                c: 2,
+                rgbA: 0xff0000,
+                rgbB: 0x00ff00,
+                rgbC: 0x0000ff,
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    board.applySnapshot(snapshot, {terrainChanged: true, objectsChanged: true});
+
+    const colorMesh = board.objectGroup.children.find(child => child.name === 'object-color') as Mesh | undefined;
+    const colorAttribute = colorMesh?.geometry.getAttribute('color');
+
+    expect(colorAttribute).toBeDefined();
+    expect(Array.from(colorAttribute!.array)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 });
 

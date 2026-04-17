@@ -11,7 +11,7 @@ import {
   WebGLRenderer,
 } from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
-import {type SceneSnapshot, sampleSceneSnapshot} from '@rune-xr/protocol';
+import {type SceneSnapshot, type TextureDefinition, sampleSceneSnapshot} from '@rune-xr/protocol';
 import {BoardScene} from './render/BoardScene.js';
 import {BridgeSocketClient} from './net/BridgeSocketClient.js';
 import {WorldStateStore} from './world/WorldStateStore.js';
@@ -31,6 +31,8 @@ type FpsTracker = {
   displayedFps: number;
   displayedFrameMs: number;
 };
+
+const MAX_RENDER_PIXEL_RATIO = 1.25;
 
 const root = document.querySelector<HTMLDivElement>('#app');
 
@@ -62,7 +64,12 @@ root.innerHTML = `
           <span class="metric-label">Snapshot</span>
           <span class="metric-value" data-snapshot-status>Sample fixture</span>
         </article>
+        <article class="metric">
+          <span class="metric-label">Object Textures</span>
+          <span class="metric-value" data-wall-texture-status>--</span>
+        </article>
       </div>
+      <div class="texture-preview-grid" data-object-texture-previews hidden></div>
       <div class="actions">
         <button class="button button-primary" type="button" data-enter-ar>Enter AR</button>
         <button class="button button-secondary" type="button" data-load-sample>Load Sample</button>
@@ -86,6 +93,8 @@ const frameTimeStatus = root.querySelector<HTMLElement>('[data-frame-time-status
 const toggleHudButton = root.querySelector<HTMLButtonElement>('[data-toggle-hud]');
 const bridgeStatus = root.querySelector<HTMLElement>('[data-bridge-status]');
 const snapshotStatus = root.querySelector<HTMLElement>('[data-snapshot-status]');
+const wallTextureStatus = root.querySelector<HTMLElement>('[data-wall-texture-status]');
+const objectTexturePreviews = root.querySelector<HTMLElement>('[data-object-texture-previews]');
 const arHint = root.querySelector<HTMLElement>('[data-ar-hint]');
 const enterArButton = root.querySelector<HTMLButtonElement>('[data-enter-ar]');
 const loadSampleButton = root.querySelector<HTMLButtonElement>('[data-load-sample]');
@@ -99,6 +108,8 @@ if (
   || !toggleHudButton
   || !bridgeStatus
   || !snapshotStatus
+  || !wallTextureStatus
+  || !objectTexturePreviews
   || !arHint
   || !enterArButton
   || !loadSampleButton
@@ -111,7 +122,12 @@ const perfBadgeElement = perfBadge;
 const fpsStatusElement = fpsStatus;
 const frameTimeStatusElement = frameTimeStatus;
 const hudToggleButton = toggleHudButton;
+const wallTextureStatusElement = wallTextureStatus;
+const objectTexturePreviewsElement = objectTexturePreviews;
 const fpsTracker = createFpsTracker();
+const texturePreviewUrls = new Map<number, string>();
+
+let currentTexturePreviewDescriptors: Array<{id: number; label: string}> = [];
 
 let hudVisible = false;
 hudElement.hidden = !hudVisible;
@@ -119,8 +135,9 @@ hudElement.hidden = !hudVisible;
 const renderer = new WebGLRenderer({
   alpha: true,
   antialias: true,
+  powerPreference: 'high-performance',
 });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(resolveRenderPixelRatio());
 renderer.xr.enabled = true;
 renderer.setClearColor(new Color('#000000'), 0);
 viewport.append(renderer.domElement);
@@ -162,6 +179,8 @@ const bridgeClient = new BridgeSocketClient({
     applySnapshot(snapshot, `Live @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
   },
   onTextureBatch(textures) {
+    cacheTexturePreviews(textures);
+    renderObjectTexturePreviews();
     void boardScene.applyTextureBatch(textures);
   },
   onStatus(status) {
@@ -356,6 +375,9 @@ function applySnapshot(snapshot: SceneSnapshot, label: string) {
   });
   boardScene.updateActors(worldState.getInterpolatedActors());
   snapshotStatus!.textContent = label;
+  wallTextureStatusElement.textContent = summarizeObjectTextures(snapshot);
+  currentTexturePreviewDescriptors = collectTexturePreviewDescriptors(snapshot);
+  renderObjectTexturePreviews();
 }
 
 async function configureArButton() {
@@ -379,9 +401,14 @@ function resizeViewport() {
   const width = window.innerWidth;
   const height = window.innerHeight;
 
+  renderer.setPixelRatio(resolveRenderPixelRatio());
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
+}
+
+function resolveRenderPixelRatio() {
+  return Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO);
 }
 
 function updatePreviewCameraRotation(deltaSeconds: number) {
@@ -486,4 +513,132 @@ function resolvePerformanceTier(fps: number) {
 
 function mix(start: number, end: number, alpha: number) {
   return start + ((end - start) * alpha);
+}
+
+function summarizeObjectTextures(snapshot: SceneSnapshot) {
+  const summaries = new Map<string, {faces: number; texturedFaces: number; textureIds: Set<number>}>();
+
+  for (const object of snapshot.objects) {
+    if (!object.model) {
+      continue;
+    }
+
+    let summary = summaries.get(object.kind);
+
+    if (!summary) {
+      summary = {
+        faces: 0,
+        texturedFaces: 0,
+        textureIds: new Set<number>(),
+      };
+      summaries.set(object.kind, summary);
+    }
+
+    for (const face of object.model.faces) {
+      summary.faces += 1;
+
+      if (typeof face.texture !== 'number') {
+        continue;
+      }
+
+      summary.texturedFaces += 1;
+      summary.textureIds.add(face.texture);
+    }
+  }
+
+  if (summaries.size === 0) {
+    return 'No model faces';
+  }
+
+  return [...summaries.entries()]
+    .map(([kind, summary]) => {
+      const ids = [...summary.textureIds].sort((left, right) => left - right).slice(0, 4);
+      const idsLabel = ids.length > 0 ? ` ids:${ids.join(',')}` : '';
+      return `${kind} ${summary.texturedFaces}/${summary.faces}${idsLabel}`;
+    })
+    .join('\n');
+}
+
+function cacheTexturePreviews(textures: TextureDefinition[]) {
+  for (const texture of textures) {
+    texturePreviewUrls.set(texture.id, `data:image/png;base64,${texture.pngBase64}`);
+  }
+}
+
+function collectTexturePreviewDescriptors(snapshot: SceneSnapshot) {
+  const descriptors: Array<{id: number; label: string}> = [];
+  const seenTextureIds = new Set<number>();
+
+  for (const kind of ['wall', 'game', 'decor', 'ground'] as const) {
+    const textureIds = new Set<number>();
+
+    for (const object of snapshot.objects) {
+      if (object.kind !== kind || !object.model) {
+        continue;
+      }
+
+      for (const face of object.model.faces) {
+        if (typeof face.texture === 'number') {
+          textureIds.add(face.texture);
+        }
+      }
+    }
+
+    for (const textureId of [...textureIds].sort((left, right) => left - right)) {
+      if (seenTextureIds.has(textureId)) {
+        continue;
+      }
+
+      descriptors.push({
+        id: textureId,
+        label: `${kind} #${textureId}`,
+      });
+      seenTextureIds.add(textureId);
+
+      if (descriptors.length >= 6) {
+        return descriptors;
+      }
+    }
+  }
+
+  return descriptors;
+}
+
+function renderObjectTexturePreviews() {
+  objectTexturePreviewsElement.replaceChildren();
+
+  if (currentTexturePreviewDescriptors.length === 0) {
+    objectTexturePreviewsElement.hidden = true;
+    return;
+  }
+
+  objectTexturePreviewsElement.hidden = false;
+
+  for (const descriptor of currentTexturePreviewDescriptors) {
+    const preview = document.createElement('article');
+    preview.className = 'texture-preview';
+
+    const label = document.createElement('span');
+    label.className = 'texture-preview-label';
+    label.textContent = descriptor.label;
+    preview.append(label);
+
+    const previewUrl = texturePreviewUrls.get(descriptor.id);
+
+    if (previewUrl) {
+      const image = document.createElement('img');
+      image.className = 'texture-preview-image';
+      image.alt = descriptor.label;
+      image.src = previewUrl;
+      preview.append(image);
+    }
+    else {
+      const placeholder = document.createElement('span');
+      placeholder.className = 'texture-preview-placeholder';
+      placeholder.textContent = 'Awaiting stream';
+      preview.append(placeholder);
+    }
+
+    objectTexturePreviewsElement.append(preview);
+  }
 }

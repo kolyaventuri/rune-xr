@@ -3,8 +3,8 @@ import {
   BufferGeometry,
   Color,
   DoubleSide,
+  MeshBasicMaterial,
   Mesh,
-  MeshStandardMaterial,
   type Texture,
 } from 'three'
 import type {SceneSnapshot, Tile, TileSurfaceModel} from '@rune-xr/protocol'
@@ -30,11 +30,8 @@ const EDGE_EPSILON = 1e-6
 
 export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas: Texture) {
   const {colorGeometry, texturedGeometry} = buildTerrainGeometries(snapshot)
-  const colorMaterial = new MeshStandardMaterial({
+  const colorMaterial = new MeshBasicMaterial({
     vertexColors: true,
-    flatShading: true,
-    metalness: 0.02,
-    roughness: 0.94,
     side: DoubleSide,
   })
   const colorMesh = new Mesh(colorGeometry, colorMaterial)
@@ -45,17 +42,14 @@ export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas:
 
   const texturedPositionAttribute = texturedGeometry.getAttribute('position')
   const texturedMesh = texturedPositionAttribute && texturedPositionAttribute.count > 0
-    ? new Mesh(texturedGeometry, new MeshStandardMaterial({
+    ? new Mesh(texturedGeometry, new MeshBasicMaterial({
       map: terrainTextureAtlas,
-      flatShading: true,
-      metalness: 0.02,
-      roughness: 0.9,
       side: DoubleSide,
-      transparent: true,
       alphaTest: 0.01,
       polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      depthWrite: false,
     }))
     : undefined
 

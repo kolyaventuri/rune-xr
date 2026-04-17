@@ -29,7 +29,7 @@ public final class BridgeClientService implements AutoCloseable
 
     public void ensureConnected(RuneXrConfig config)
     {
-        URI targetUri = URI.create(String.format("ws://%s:%d/ws", config.bridgeHost(), config.bridgePort()));
+        URI targetUri = buildTargetUri(config);
 
         if (socket != null && targetUri.equals(connectedUri) && !socket.isOutputClosed())
         {
@@ -40,6 +40,12 @@ public final class BridgeClientService implements AutoCloseable
         socket = httpClient.newWebSocketBuilder().buildAsync(targetUri, new Listener()).join();
         connectedUri = targetUri;
         socket.sendText(gson.toJson(ProtocolMessages.HelloMessage.plugin("runelite-plugin")), true).join();
+    }
+
+    public boolean isConnected(RuneXrConfig config)
+    {
+        URI targetUri = buildTargetUri(config);
+        return socket != null && targetUri.equals(connectedUri) && !socket.isOutputClosed();
     }
 
     public boolean sendSnapshot(RuneXrConfig config, SceneSnapshotPayload snapshot)
@@ -82,6 +88,11 @@ public final class BridgeClientService implements AutoCloseable
     public void resetConnection()
     {
         close();
+    }
+
+    private static URI buildTargetUri(RuneXrConfig config)
+    {
+        return URI.create(String.format("ws://%s:%d/ws", config.bridgeHost(), config.bridgePort()));
     }
 
     @Override

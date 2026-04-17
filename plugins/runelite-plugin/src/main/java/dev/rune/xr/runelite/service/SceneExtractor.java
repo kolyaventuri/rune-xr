@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,6 +51,7 @@ public final class SceneExtractor
     static final int LOCAL_TILE_SIZE = 128;
     static final int HALF_TILE_SIZE = LOCAL_TILE_SIZE / 2;
     static final int TEXTURE_SIZE = 128;
+    static final int MAX_CACHED_OBJECT_MODELS = 2048;
 
     private record RenderablePlacement(Renderable renderable, int orientation, int offsetX, int offsetY)
     {
@@ -59,8 +61,20 @@ public final class SceneExtractor
     {
     }
 
+    private record StaticObjectModelKey(long objectHash, int objectId, int x, int y, int plane)
+    {
+    }
+
     private final Client client;
     private final Map<Integer, Integer> textureColorCache = new HashMap<>();
+    private final Map<StaticObjectModelKey, TileSurfaceModelPayload> objectModelCache = new LinkedHashMap<>(256, 0.75f, true)
+    {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<StaticObjectModelKey, TileSurfaceModelPayload> eldest)
+        {
+            return size() > MAX_CACHED_OBJECT_MODELS;
+        }
+    };
 
     public SceneExtractor(Client client)
     {
@@ -515,6 +529,18 @@ public final class SceneExtractor
             return null;
         }
 
+        StaticObjectModelKey cacheKey = createStaticObjectModelKey(object, placements);
+
+        if (cacheKey != null)
+        {
+            TileSurfaceModelPayload cachedModel = objectModelCache.get(cacheKey);
+
+            if (cachedModel != null)
+            {
+                return cachedModel;
+            }
+        }
+
         WorldPoint point = object.getWorldLocation();
         LocalPoint reference = LocalPoint.fromWorld(client, point);
 
@@ -533,7 +559,47 @@ public final class SceneExtractor
             appendRenderableModel(object, placement, referenceOriginX, referenceOriginZ, vertices, faces);
         }
 
-        return faces.isEmpty() ? null : new TileSurfaceModelPayload(vertices, faces);
+        TileSurfaceModelPayload model = faces.isEmpty() ? null : new TileSurfaceModelPayload(vertices, faces);
+
+        if (cacheKey != null && model != null)
+        {
+            objectModelCache.put(cacheKey, model);
+        }
+
+        return model;
+    }
+
+    private static StaticObjectModelKey createStaticObjectModelKey(TileObject object, List<RenderablePlacement> placements)
+    {
+        for (RenderablePlacement placement : placements)
+        {
+            Renderable renderable = placement.renderable();
+
+            if (renderable == null)
+            {
+                continue;
+            }
+
+            if (!(renderable instanceof Model) || renderable instanceof DynamicObject)
+            {
+                return null;
+            }
+        }
+
+        WorldPoint point = object.getWorldLocation();
+
+        if (point == null)
+        {
+            return null;
+        }
+
+        return new StaticObjectModelKey(
+            object.getHash(),
+            object.getId(),
+            point.getX(),
+            point.getY(),
+            point.getPlane()
+        );
     }
 
     private void appendRenderableModel(
@@ -673,6 +739,9 @@ public final class SceneExtractor
 
         Integer texture = valueAt(faceTextures, faceIndex, SceneExtractor::normalizeTexture);
         FaceUvs uvs = computeFaceUvs(model, faceIndex);
+        Integer rgbA = packedFaceColorToRgb(color1);
+        Integer rgbB = packedFaceColorToRgb(color2);
+        Integer rgbC = packedFaceColorToRgb(color3);
         Integer rgb = texture == null
             ? averagePackedFaceColor(color1, color2, color3)
             : textureColorCache.computeIfAbsent(texture, this::resolveTextureRgb);
@@ -682,6 +751,9 @@ public final class SceneExtractor
             b + vertexBase,
             c + vertexBase,
             rgb,
+            rgbA,
+            rgbB,
+            rgbC,
             texture,
             uvs == null ? null : uvs.uA(),
             uvs == null ? null : uvs.vA(),
@@ -775,18 +847,93 @@ public final class SceneExtractor
             return null;
         }
 
-        short hsl = (short) packedHsl;
-        double hue = (double) JagexColor.unpackHue(hsl) / JagexColor.HUE_MAX;
-        double saturation = (double) JagexColor.unpackSaturation(hsl) / JagexColor.SATURATION_MAX;
-        double luminance = (double) JagexColor.unpackLuminance(hsl) / JagexColor.LUMINANCE_MAX;
-        double q = luminance < 0.5
-            ? luminance * (1 + saturation)
-            : luminance + saturation - luminance * saturation;
-        double p = 2 * luminance - q;
-        int red = channelToByte(hueToRgb(p, q, hue + (1.0 / 3.0)));
-        int green = channelToByte(hueToRgb(p, q, hue));
-        int blue = channelToByte(hueToRgb(p, q, hue - (1.0 / 3.0)));
-        return (red << 16) | (green << 8) | blue;
+        double hue = ((packedHsl >> 10) & 63) / 64.0d + 0.0078125d;
+        double saturation = ((packedHsl >> 7) & 7) / 8.0d + 0.0625d;
+        double luminance = (packedHsl & 127) / 128.0d;
+        double red = luminance;
+        double green = luminance;
+        double blue = luminance;
+        double blended;
+
+        if (luminance < 0.5d)
+        {
+            blended = luminance * (1.0d + saturation);
+        }
+        else
+        {
+            blended = luminance + saturation - luminance * saturation;
+        }
+
+        double base = 2.0d * luminance - blended;
+        double shiftedRedHue = hue + (1.0d / 3.0d);
+
+        if (shiftedRedHue > 1.0d)
+        {
+            shiftedRedHue -= 1.0d;
+        }
+
+        double shiftedBlueHue = hue - (1.0d / 3.0d);
+
+        if (shiftedBlueHue < 0.0d)
+        {
+            shiftedBlueHue += 1.0d;
+        }
+
+        if (6.0d * shiftedRedHue < 1.0d)
+        {
+            red = base + (blended - base) * 6.0d * shiftedRedHue;
+        }
+        else if (2.0d * shiftedRedHue < 1.0d)
+        {
+            red = blended;
+        }
+        else if (3.0d * shiftedRedHue < 2.0d)
+        {
+            red = base + (blended - base) * ((2.0d / 3.0d) - shiftedRedHue) * 6.0d;
+        }
+        else
+        {
+            red = base;
+        }
+
+        if (6.0d * hue < 1.0d)
+        {
+            green = base + (blended - base) * 6.0d * hue;
+        }
+        else if (2.0d * hue < 1.0d)
+        {
+            green = blended;
+        }
+        else if (3.0d * hue < 2.0d)
+        {
+            green = base + (blended - base) * ((2.0d / 3.0d) - hue) * 6.0d;
+        }
+        else
+        {
+            green = base;
+        }
+
+        if (6.0d * shiftedBlueHue < 1.0d)
+        {
+            blue = base + (blended - base) * 6.0d * shiftedBlueHue;
+        }
+        else if (2.0d * shiftedBlueHue < 1.0d)
+        {
+            blue = blended;
+        }
+        else if (3.0d * shiftedBlueHue < 2.0d)
+        {
+            blue = base + (blended - base) * ((2.0d / 3.0d) - shiftedBlueHue) * 6.0d;
+        }
+        else
+        {
+            blue = base;
+        }
+
+        int redByte = channelToByte(red);
+        int greenByte = channelToByte(green);
+        int blueByte = channelToByte(blue);
+        return (redByte << 16) | (greenByte << 8) | blueByte;
     }
 
     private TileSurfacePayload extractTileSurface(Scene scene, Tile tile, int sceneX, int sceneY)
@@ -929,11 +1076,17 @@ public final class SceneExtractor
             }
 
             Integer faceTexture = valueAt(triangleTextureId, index, SceneExtractor::normalizeTexture);
+            Integer rgbA = packedFaceColorToRgb(valueAt(triangleColorA, index));
+            Integer rgbB = packedFaceColorToRgb(valueAt(triangleColorB, index));
+            Integer rgbC = packedFaceColorToRgb(valueAt(triangleColorC, index));
             faces.add(new TileSurfaceFacePayload(
                 a,
                 b,
                 c,
                 faceTexture == null ? averagePackedFaceColor(triangleColorA, triangleColorB, triangleColorC, index) : null,
+                rgbA,
+                rgbB,
+                rgbC,
                 faceTexture,
                 null,
                 null,
@@ -1043,38 +1196,6 @@ public final class SceneExtractor
         return new FaceUvs(0f, 0f, 1f, 0f, 0f, 1f);
     }
 
-    private static double hueToRgb(double p, double q, double t)
-    {
-        double hue = t;
-
-        if (hue < 0)
-        {
-            hue += 1;
-        }
-
-        if (hue > 1)
-        {
-            hue -= 1;
-        }
-
-        if (hue < (1.0 / 6.0))
-        {
-            return p + (q - p) * 6 * hue;
-        }
-
-        if (hue < 0.5)
-        {
-            return q;
-        }
-
-        if (hue < (2.0 / 3.0))
-        {
-            return p + (q - p) * ((2.0 / 3.0) - hue) * 6;
-        }
-
-        return p;
-    }
-
     private static Integer averagePackedFaceColor(int[] triangleColorA, int[] triangleColorB, int[] triangleColorC, int index)
     {
         return averagePackedFaceColor(valueAt(triangleColorA, index), valueAt(triangleColorB, index), valueAt(triangleColorC, index));
@@ -1098,6 +1219,11 @@ public final class SceneExtractor
         int green = Math.toIntExact(totals[1] / sampleCount);
         int blue = Math.toIntExact(totals[2] / sampleCount);
         return (red << 16) | (green << 8) | blue;
+    }
+
+    private static Integer packedFaceColorToRgb(Integer packedColor)
+    {
+        return packedColor == null ? null : packedHslToRgb(packedColor);
     }
 
     private static int accumulateTriangleColors(int[] triangleColors, long[] totals)

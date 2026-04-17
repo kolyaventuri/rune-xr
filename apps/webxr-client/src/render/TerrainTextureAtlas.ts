@@ -1,4 +1,12 @@
-import {ClampToEdgeWrapping, DataTexture, NearestFilter, RGBAFormat, SRGBColorSpace, UnsignedByteType} from 'three'
+import {
+  ClampToEdgeWrapping,
+  DataTexture,
+  NearestFilter,
+  RGBAFormat,
+  RepeatWrapping,
+  SRGBColorSpace,
+  UnsignedByteType,
+} from 'three'
 import type {TextureDefinition} from '@rune-xr/protocol'
 
 export const TERRAIN_TEXTURE_SLOT_SIZE = 128
@@ -9,6 +17,8 @@ const MAX_TERRAIN_TEXTURE_ID = (TERRAIN_TEXTURE_GRID_SIZE * TERRAIN_TEXTURE_GRID
 export class TerrainTextureAtlas {
   readonly texture: DataTexture
   private readonly data = new Uint8Array(TERRAIN_TEXTURE_ATLAS_SIZE * TERRAIN_TEXTURE_ATLAS_SIZE * 4)
+  private readonly objectTextures = new Map<number, {data: Uint8Array; texture: DataTexture}>()
+  private readonly loadedObjectTextureIds = new Set<number>()
 
   constructor() {
     this.texture = new DataTexture(
@@ -30,9 +40,10 @@ export class TerrainTextureAtlas {
 
   async upsertBatch(textures: TextureDefinition[]) {
     let changed = false
+    const updatedObjectTextureIds: number[] = []
 
     for (const texture of textures) {
-      if (!isTerrainTextureId(texture.id) || texture.width !== TERRAIN_TEXTURE_SLOT_SIZE || texture.height !== TERRAIN_TEXTURE_SLOT_SIZE) {
+      if (!isObjectTextureId(texture.id) || texture.width !== TERRAIN_TEXTURE_SLOT_SIZE || texture.height !== TERRAIN_TEXTURE_SLOT_SIZE) {
         continue
       }
 
@@ -42,13 +53,54 @@ export class TerrainTextureAtlas {
         continue
       }
 
-      writeTextureSlot(this.data, texture.id, pixels)
-      changed = true
+      const flippedPixels = flipTexturePixels(pixels)
+
+      if (isTerrainTextureId(texture.id)) {
+        writeTextureSlot(this.data, texture.id, flippedPixels)
+        changed = true
+      }
+
+      this.upsertObjectTexture(texture.id, flippedPixels)
+      this.loadedObjectTextureIds.add(texture.id)
+      updatedObjectTextureIds.push(texture.id)
     }
 
     if (changed) {
       this.texture.needsUpdate = true
     }
+
+    return updatedObjectTextureIds
+  }
+
+  getObjectTexture(textureId: number) {
+    if (!isObjectTextureId(textureId)) {
+      return undefined
+    }
+
+    let entry = this.objectTextures.get(textureId)
+
+    if (!entry) {
+      entry = createObjectTextureEntry(textureId)
+      this.objectTextures.set(textureId, entry)
+    }
+
+    return entry.texture
+  }
+
+  hasObjectTexture(textureId: number) {
+    return this.loadedObjectTextureIds.has(textureId)
+  }
+
+  private upsertObjectTexture(textureId: number, pixels: Uint8Array) {
+    let entry = this.objectTextures.get(textureId)
+
+    if (!entry) {
+      entry = createObjectTextureEntry(textureId)
+      this.objectTextures.set(textureId, entry)
+    }
+
+    entry.data.set(pixels)
+    entry.texture.needsUpdate = true
   }
 }
 
@@ -57,6 +109,12 @@ export function isTerrainTextureId(textureId: number | undefined): textureId is 
     && Number.isInteger(textureId)
     && textureId >= 0
     && textureId <= MAX_TERRAIN_TEXTURE_ID
+}
+
+export function isObjectTextureId(textureId: number | undefined): textureId is number {
+  return typeof textureId === 'number'
+    && Number.isInteger(textureId)
+    && textureId >= 0
 }
 
 export function getTerrainTextureSlotBounds(textureId: number) {
@@ -75,16 +133,14 @@ export function getTerrainTextureSlotBounds(textureId: number) {
   }
 }
 
-function writeTextureSlot(target: Uint8Array, textureId: number, pixels: Uint8ClampedArray) {
+function writeTextureSlot(target: Uint8Array, textureId: number, pixels: Uint8Array) {
   const slotX = (textureId % TERRAIN_TEXTURE_GRID_SIZE) * TERRAIN_TEXTURE_SLOT_SIZE
   const slotY = Math.floor(textureId / TERRAIN_TEXTURE_GRID_SIZE) * TERRAIN_TEXTURE_SLOT_SIZE
 
-  for (let sourceY = 0; sourceY < TERRAIN_TEXTURE_SLOT_SIZE; sourceY += 1) {
-    const destinationY = slotY + (TERRAIN_TEXTURE_SLOT_SIZE - 1 - sourceY)
-
-    for (let sourceX = 0; sourceX < TERRAIN_TEXTURE_SLOT_SIZE; sourceX += 1) {
-      const sourceOffset = ((sourceY * TERRAIN_TEXTURE_SLOT_SIZE) + sourceX) * 4
-      const destinationOffset = ((destinationY * TERRAIN_TEXTURE_ATLAS_SIZE) + slotX + sourceX) * 4
+  for (let y = 0; y < TERRAIN_TEXTURE_SLOT_SIZE; y += 1) {
+    for (let x = 0; x < TERRAIN_TEXTURE_SLOT_SIZE; x += 1) {
+      const sourceOffset = ((y * TERRAIN_TEXTURE_SLOT_SIZE) + x) * 4
+      const destinationOffset = (((slotY + y) * TERRAIN_TEXTURE_ATLAS_SIZE) + slotX + x) * 4
 
       target[destinationOffset] = pixels[sourceOffset] ?? 0
       target[destinationOffset + 1] = pixels[sourceOffset + 1] ?? 0
@@ -92,6 +148,48 @@ function writeTextureSlot(target: Uint8Array, textureId: number, pixels: Uint8Cl
       target[destinationOffset + 3] = pixels[sourceOffset + 3] ?? 0
     }
   }
+}
+
+function createObjectTextureEntry(textureId: number) {
+  const data = new Uint8Array(TERRAIN_TEXTURE_SLOT_SIZE * TERRAIN_TEXTURE_SLOT_SIZE * 4)
+  const texture = new DataTexture(
+    data,
+    TERRAIN_TEXTURE_SLOT_SIZE,
+    TERRAIN_TEXTURE_SLOT_SIZE,
+    RGBAFormat,
+    UnsignedByteType,
+  )
+
+  texture.name = `object-texture-${textureId}`
+  texture.colorSpace = SRGBColorSpace
+  texture.wrapS = RepeatWrapping
+  texture.wrapT = RepeatWrapping
+  texture.magFilter = NearestFilter
+  texture.minFilter = NearestFilter
+  texture.generateMipmaps = false
+  texture.needsUpdate = true
+
+  return {data, texture}
+}
+
+function flipTexturePixels(source: Uint8ClampedArray) {
+  const flipped = new Uint8Array(source.length)
+
+  for (let sourceY = 0; sourceY < TERRAIN_TEXTURE_SLOT_SIZE; sourceY += 1) {
+    const destinationY = TERRAIN_TEXTURE_SLOT_SIZE - 1 - sourceY
+
+    for (let sourceX = 0; sourceX < TERRAIN_TEXTURE_SLOT_SIZE; sourceX += 1) {
+      const sourceOffset = ((sourceY * TERRAIN_TEXTURE_SLOT_SIZE) + sourceX) * 4
+      const destinationOffset = ((destinationY * TERRAIN_TEXTURE_SLOT_SIZE) + sourceX) * 4
+
+      flipped[destinationOffset] = source[sourceOffset] ?? 0
+      flipped[destinationOffset + 1] = source[sourceOffset + 1] ?? 0
+      flipped[destinationOffset + 2] = source[sourceOffset + 2] ?? 0
+      flipped[destinationOffset + 3] = source[sourceOffset + 3] ?? 0
+    }
+  }
+
+  return flipped
 }
 
 async function decodeTexturePixels(texture: TextureDefinition) {

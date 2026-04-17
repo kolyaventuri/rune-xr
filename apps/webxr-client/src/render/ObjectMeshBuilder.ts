@@ -3,13 +3,13 @@ import {
   BufferGeometry,
   Color,
   DoubleSide,
+  MeshBasicMaterial,
   Mesh,
-  MeshStandardMaterial,
   type Texture,
 } from 'three'
 import type {SceneObject, SceneSnapshot} from '@rune-xr/protocol'
 import {HEIGHT_SCALE, TILE_WORLD_SIZE} from '../config.js'
-import {getTerrainTextureSlotBounds, isTerrainTextureId} from './TerrainTextureAtlas.js'
+import {isObjectTextureId} from './TerrainTextureAtlas.js'
 
 const LOCAL_TILE_SIZE = 128
 type ObjectModel = NonNullable<SceneObject['model']>
@@ -22,23 +22,24 @@ type GeometryBuffers = {
   uvs: number[];
 }
 
-export function buildObjectMeshes(snapshot: SceneSnapshot, objects: SceneObject[], terrainTextureAtlas: Texture) {
+export function buildObjectMeshes(
+  snapshot: SceneSnapshot,
+  objects: SceneObject[],
+  getObjectTexture: (textureId: number) => Texture | undefined,
+  hasObjectTexture: (textureId: number) => boolean,
+) {
   const maxY = Math.max(snapshot.baseY, ...snapshot.tiles.map(tile => tile.y))
   const colorBuffers = createGeometryBuffers()
-  const texturedBuffers = createGeometryBuffers()
+  const texturedBuffersByTexture = new Map<number, GeometryBuffers>()
 
   for (const object of objects) {
-    appendObject(object, snapshot, maxY, colorBuffers, texturedBuffers)
+    appendObject(object, snapshot, maxY, colorBuffers, texturedBuffersByTexture, hasObjectTexture)
   }
 
   const colorGeometry = buildColorGeometry(colorBuffers)
-  const texturedGeometry = buildTexturedGeometry(texturedBuffers)
 
-  const colorMesh = new Mesh(colorGeometry, new MeshStandardMaterial({
+  const colorMesh = new Mesh(colorGeometry, new MeshBasicMaterial({
     vertexColors: true,
-    flatShading: true,
-    metalness: 0.06,
-    roughness: 0.92,
     side: DoubleSide,
   }))
 
@@ -46,30 +47,42 @@ export function buildObjectMeshes(snapshot: SceneSnapshot, objects: SceneObject[
   colorMesh.castShadow = true
   colorMesh.receiveShadow = true
 
-  const texturedPositionAttribute = texturedGeometry.getAttribute('position')
-  const texturedMesh = texturedPositionAttribute && texturedPositionAttribute.count > 0
-    ? new Mesh(texturedGeometry, new MeshStandardMaterial({
-      map: terrainTextureAtlas,
-      flatShading: true,
-      metalness: 0.06,
-      roughness: 0.88,
+  const texturedMeshes: Mesh[] = []
+
+  for (const [textureId, buffers] of texturedBuffersByTexture) {
+    const texturedGeometry = buildTexturedGeometry(buffers)
+    const texturedPositionAttribute = texturedGeometry.getAttribute('position')
+
+    if (!texturedPositionAttribute || texturedPositionAttribute.count === 0) {
+      continue
+    }
+
+    const texture = getObjectTexture(textureId)
+
+    if (!texture) {
+      continue
+    }
+
+    const texturedMesh = new Mesh(texturedGeometry, new MeshBasicMaterial({
+      map: texture,
+      vertexColors: true,
       side: DoubleSide,
-      transparent: true,
       alphaTest: 0.01,
       polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+      depthWrite: false,
     }))
-    : undefined
 
-  if (texturedMesh) {
     texturedMesh.name = 'object-texture'
     texturedMesh.castShadow = true
     texturedMesh.receiveShadow = true
     texturedMesh.renderOrder = 2
+    texturedMesh.userData.textureId = textureId
+    texturedMeshes.push(texturedMesh)
   }
 
-  return {colorMesh, texturedMesh}
+  return {colorMesh, texturedMeshes}
 }
 
 function appendObject(
@@ -77,7 +90,8 @@ function appendObject(
   snapshot: SceneSnapshot,
   maxY: number,
   colorBuffers: GeometryBuffers,
-  texturedBuffers: GeometryBuffers,
+  texturedBuffersByTexture: Map<number, GeometryBuffers>,
+  hasObjectTexture: (textureId: number) => boolean,
 ) {
   const model = object.model
 
@@ -96,19 +110,21 @@ function appendObject(
       continue
     }
 
-    const faceColor = face.rgb === undefined ? fallbackColor : new Color(face.rgb)
+    const textureId = isObjectTextureId(face.texture) ? face.texture : undefined
+    const textureLoaded = textureId !== undefined && hasObjectTexture(textureId)
 
-    appendColorVertex(snapshot, maxY, object, a, colorBuffers, faceColor)
-    appendColorVertex(snapshot, maxY, object, b, colorBuffers, faceColor)
-    appendColorVertex(snapshot, maxY, object, c, colorBuffers, faceColor)
-
-    if (!isTerrainTextureId(face.texture)) {
+    if (!textureLoaded) {
+      appendColorVertex(snapshot, maxY, object, a, colorBuffers, resolveFaceVertexColor(face, 'A', fallbackColor))
+      appendColorVertex(snapshot, maxY, object, b, colorBuffers, resolveFaceVertexColor(face, 'B', fallbackColor))
+      appendColorVertex(snapshot, maxY, object, c, colorBuffers, resolveFaceVertexColor(face, 'C', fallbackColor))
       continue
     }
 
-    appendTexturedVertex(snapshot, maxY, object, a, texturedBuffers, face, face.texture, 'A')
-    appendTexturedVertex(snapshot, maxY, object, b, texturedBuffers, face, face.texture, 'B')
-    appendTexturedVertex(snapshot, maxY, object, c, texturedBuffers, face, face.texture, 'C')
+    const texturedBuffers = getTextureBuffers(texturedBuffersByTexture, textureId)
+
+    appendTexturedVertex(snapshot, maxY, object, a, texturedBuffers, face, resolveFaceVertexColor(face, 'A', fallbackColor), 'A')
+    appendTexturedVertex(snapshot, maxY, object, b, texturedBuffers, face, resolveFaceVertexColor(face, 'B', fallbackColor), 'B')
+    appendTexturedVertex(snapshot, maxY, object, c, texturedBuffers, face, resolveFaceVertexColor(face, 'C', fallbackColor), 'C')
   }
 }
 
@@ -131,11 +147,12 @@ function appendTexturedVertex(
   vertex: ObjectVertex,
   buffers: GeometryBuffers,
   face: ObjectFace,
-  textureId: number,
+  color: Color,
   suffix: 'A' | 'B' | 'C',
 ) {
   appendPosition(snapshot, maxY, object, vertex, buffers.positions)
-  appendUv(face, textureId, buffers.uvs, suffix)
+  appendUv(face, buffers.uvs, suffix)
+  buffers.colors.push(color.r, color.g, color.b)
 }
 
 function appendPosition(
@@ -152,19 +169,10 @@ function appendPosition(
   )
 }
 
-function appendUv(face: ObjectFace, textureId: number, uvs: number[], suffix: 'A' | 'B' | 'C') {
-  const bounds = getTerrainTextureSlotBounds(textureId)
-
-  if (!bounds) {
-    return
-  }
-
+function appendUv(face: ObjectFace, uvs: number[], suffix: 'A' | 'B' | 'C') {
   const [u, v] = faceUvs(face, suffix)
 
-  uvs.push(
-    bounds.uMin + ((bounds.uMax - bounds.uMin) * u),
-    bounds.vMin + ((bounds.vMax - bounds.vMin) * v),
-  )
+  uvs.push(u, v)
 }
 
 function faceUvs(face: ObjectFace, suffix: 'A' | 'B' | 'C') {
@@ -175,6 +183,31 @@ function faceUvs(face: ObjectFace, suffix: 'A' | 'B' | 'C') {
       return [face.uB ?? 1, face.vB ?? 0] as const
     case 'C':
       return [face.uC ?? 0, face.vC ?? 1] as const
+  }
+}
+
+function resolveFaceVertexColor(face: ObjectFace, suffix: 'A' | 'B' | 'C', fallbackColor: Color) {
+  const rgb = switchFaceVertexRgb(face, suffix)
+
+  if (rgb !== undefined) {
+    return new Color(rgb)
+  }
+
+  if (face.rgb !== undefined) {
+    return new Color(face.rgb)
+  }
+
+  return fallbackColor
+}
+
+function switchFaceVertexRgb(face: ObjectFace, suffix: 'A' | 'B' | 'C') {
+  switch (suffix) {
+    case 'A':
+      return face.rgbA
+    case 'B':
+      return face.rgbB
+    case 'C':
+      return face.rgbC
   }
 }
 
@@ -197,6 +230,17 @@ function createGeometryBuffers(): GeometryBuffers {
     colors: [],
     uvs: [],
   }
+}
+
+function getTextureBuffers(texturedBuffersByTexture: Map<number, GeometryBuffers>, textureId: number) {
+  let buffers = texturedBuffersByTexture.get(textureId)
+
+  if (!buffers) {
+    buffers = createGeometryBuffers()
+    texturedBuffersByTexture.set(textureId, buffers)
+  }
+
+  return buffers
 }
 
 function buildColorGeometry(buffers: GeometryBuffers) {
@@ -222,6 +266,7 @@ function buildTexturedGeometry(buffers: GeometryBuffers) {
 
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(buffers.positions), 3))
   geometry.setAttribute('uv', new BufferAttribute(new Float32Array(buffers.uvs), 2))
+  geometry.setAttribute('color', new BufferAttribute(new Float32Array(buffers.colors), 3))
   geometry.computeVertexNormals()
 
   return geometry

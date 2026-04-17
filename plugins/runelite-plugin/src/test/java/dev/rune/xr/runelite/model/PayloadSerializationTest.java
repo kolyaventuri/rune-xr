@@ -32,6 +32,8 @@ class PayloadSerializationTest
         String json = gson.toJson(ProtocolMessages.TextureBatchMessage.fromTextures(batch));
 
         assertTrue(json.contains("\"kind\":\"texture_batch\""));
+        assertTrue(json.contains("\"textures\":[{"));
+        assertTrue(!json.contains("\"textures\":{\"textures\""));
         assertTrue(json.contains("\"pngBase64\":\"Zm9v\""));
     }
 }

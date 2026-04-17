@@ -159,6 +159,54 @@ body {
   margin-top: 0.35rem;
   font-size: 1rem;
   font-weight: 700;
+  white-space: pre-line;
+}
+
+.texture-preview-grid {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+}
+
+.texture-preview {
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(24, 35, 26, 0.08);
+}
+
+.texture-preview-label {
+  display: block;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(24, 35, 26, 0.58);
+}
+
+.texture-preview-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  margin-top: 0.45rem;
+  border-radius: 10px;
+  border: 1px solid rgba(24, 35, 26, 0.1);
+  image-rendering: pixelated;
+  background: rgba(24, 35, 26, 0.08);
+}
+
+.texture-preview-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  margin-top: 0.45rem;
+  border-radius: 10px;
+  border: 1px dashed rgba(24, 35, 26, 0.14);
+  color: rgba(24, 35, 26, 0.52);
+  font-size: 0.78rem;
+  text-align: center;
+  background: rgba(24, 35, 26, 0.04);
 }
 
 .actions {

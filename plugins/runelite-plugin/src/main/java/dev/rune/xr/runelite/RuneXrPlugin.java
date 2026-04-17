@@ -3,6 +3,7 @@ package dev.rune.xr.runelite;
 import com.google.gson.Gson;
 import com.google.inject.Provides;
 import dev.rune.xr.runelite.config.RuneXrConfig;
+import dev.rune.xr.runelite.model.SceneSnapshotState;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
 import dev.rune.xr.runelite.model.TextureBatchPayload;
 import dev.rune.xr.runelite.model.TextureDefinitionPayload;
@@ -15,6 +16,7 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.client.callback.ClientThread;
@@ -50,8 +52,9 @@ public class RuneXrPlugin extends Plugin
     private BridgeClientService bridgeClient;
     private SceneExtractor sceneExtractor;
     private SyntheticSceneFactory syntheticSceneFactory;
-    private String lastSnapshotPayload;
+    private SceneSnapshotState lastSnapshotState;
     private final Set<Integer> sentTextureIds = new LinkedHashSet<>();
+    private final AtomicBoolean snapshotScheduled = new AtomicBoolean();
 
     @Override
     protected void startUp()
@@ -112,7 +115,7 @@ public class RuneXrPlugin extends Plugin
             return thread;
         });
         executor.scheduleAtFixedRate(
-            () -> clientThread.invoke(this::publishSnapshot),
+            this::scheduleSnapshotPublish,
             0L,
             Math.max(100, config.updateRateMs()),
             TimeUnit.MILLISECONDS
@@ -126,31 +129,50 @@ public class RuneXrPlugin extends Plugin
             executor.shutdownNow();
             executor = null;
         }
+
+        snapshotScheduled.set(false);
     }
 
     private void publishSnapshot()
     {
-        Optional<SceneSnapshotPayload> snapshot = config.syntheticMode()
-            ? Optional.of(syntheticSceneFactory.nextSnapshot(config.tileRadius()))
-            : sceneExtractor.extract(config.tileRadius());
+        try
+        {
+            Optional<SceneSnapshotPayload> snapshot = config.syntheticMode()
+                ? Optional.of(syntheticSceneFactory.nextSnapshot(config.tileRadius()))
+                : sceneExtractor.extract(config.tileRadius());
 
-        snapshot.ifPresent(this::sendIfChanged);
+            snapshot.ifPresent(this::sendIfChanged);
+        }
+        finally
+        {
+            snapshotScheduled.set(false);
+        }
+    }
+
+    private void scheduleSnapshotPublish()
+    {
+        if (!snapshotScheduled.compareAndSet(false, true))
+        {
+            return;
+        }
+
+        clientThread.invoke(this::publishSnapshot);
     }
 
     private void sendIfChanged(SceneSnapshotPayload snapshot)
     {
+        SceneSnapshotState snapshotState = SceneSnapshotState.fromSnapshot(snapshot);
+
         sendPendingTextures(snapshot);
 
-        String payload = gson.toJson(snapshot);
-
-        if (payload.equals(lastSnapshotPayload))
+        if (snapshotState.equals(lastSnapshotState) && bridgeClient.isConnected(config))
         {
             return;
         }
 
         if (bridgeClient.sendSnapshot(config, snapshot))
         {
-            lastSnapshotPayload = payload;
+            lastSnapshotState = snapshotState;
             return;
         }
 
@@ -191,7 +213,7 @@ public class RuneXrPlugin extends Plugin
         }
     }
 
-    private LinkedHashSet<Integer> collectTextureIds(SceneSnapshotPayload snapshot)
+    static LinkedHashSet<Integer> collectTextureIds(SceneSnapshotPayload snapshot)
     {
         LinkedHashSet<Integer> textureIds = new LinkedHashSet<>();
 
@@ -225,12 +247,30 @@ public class RuneXrPlugin extends Plugin
             }
         }
 
+        for (var object : snapshot.objects())
+        {
+            var model = object.model();
+
+            if (model == null)
+            {
+                continue;
+            }
+
+            for (var face : model.faces())
+            {
+                if (face.texture() != null)
+                {
+                    textureIds.add(face.texture());
+                }
+            }
+        }
+
         return textureIds;
     }
 
     private void clearSentState()
     {
-        lastSnapshotPayload = null;
+        lastSnapshotState = null;
         sentTextureIds.clear();
     }
 

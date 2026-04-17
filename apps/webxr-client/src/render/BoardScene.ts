@@ -163,7 +163,11 @@ export class BoardScene {
   }
 
   async applyTextureBatch(textures: TextureDefinition[]) {
-    await this.terrainTextureAtlas.upsertBatch(textures);
+    const updatedObjectTextureIds = await this.terrainTextureAtlas.upsertBatch(textures);
+
+    if (this.snapshot && updatedObjectTextureIds.length > 0) {
+      this.rebuildObjects(this.snapshot.objects);
+    }
   }
 
   applyPlacementMatrix(matrix: Matrix4) {
@@ -216,12 +220,17 @@ export class BoardScene {
     const proxyObjects = objects.filter(object => !object.model);
 
     if (modelObjects.length > 0 && this.snapshot) {
-      const meshes = buildObjectMeshes(this.snapshot, modelObjects, this.terrainTextureAtlas.texture);
+      const meshes = buildObjectMeshes(
+        this.snapshot,
+        modelObjects,
+        textureId => this.terrainTextureAtlas.getObjectTexture(textureId),
+        textureId => this.terrainTextureAtlas.hasObjectTexture(textureId),
+      );
 
       this.objectGroup.add(meshes.colorMesh);
 
-      if (meshes.texturedMesh) {
-        this.objectGroup.add(meshes.texturedMesh);
+      for (const texturedMesh of meshes.texturedMeshes) {
+        this.objectGroup.add(texturedMesh);
       }
     }
 

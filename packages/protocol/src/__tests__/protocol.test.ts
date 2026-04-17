@@ -73,7 +73,7 @@ describe('protocol fixtures', () => {
 								{x: 0, y: 10, z: 128},
 							],
 							faces: [
-								{a: 0, b: 1, c: 2, rgb: 0x3366cc},
+								{a: 0, b: 1, c: 2, rgb: 0x3366cc, rgbA: 0x3355aa, rgbB: 0x3366cc, rgbC: 0x4477dd},
 							],
 						},
 					},
@@ -85,6 +85,7 @@ describe('protocol fixtures', () => {
 		expect(parsed.tiles[0]?.surface?.rgb).toBe(0x3366cc);
 		expect(parsed.tiles[0]?.surface?.overlayId).toBe(5);
 		expect(parsed.tiles[0]?.surface?.model?.faces[0]?.rgb).toBe(0x3366cc);
+		expect(parsed.tiles[0]?.surface?.model?.faces[0]?.rgbC).toBe(0x4477dd);
 	});
 
 	it('accepts optional scene object footprint and wall metadata', () => {
@@ -112,6 +113,9 @@ describe('protocol fixtures', () => {
 								a: 0,
 								b: 1,
 								c: 2,
+								rgbA: 0xaa0000,
+								rgbB: 0x00aa00,
+								rgbC: 0x0000aa,
 								texture: 7,
 								uA: 0,
 								vA: 0,
@@ -131,6 +135,7 @@ describe('protocol fixtures', () => {
 		expect(parsed.objects[0]?.rotationDegrees).toBe(270);
 		expect(parsed.objects[1]?.wallOrientationB).toBe(8);
 		expect(parsed.objects[1]?.model?.faces[0]?.texture).toBe(7);
+		expect(parsed.objects[1]?.model?.faces[0]?.rgbB).toBe(0x00aa00);
 		expect(parsed.objects[1]?.model?.faces[0]?.uB).toBe(1);
 	});
 });
