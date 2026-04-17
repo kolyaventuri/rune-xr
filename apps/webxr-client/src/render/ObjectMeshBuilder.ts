@@ -7,8 +7,15 @@ import {
   Mesh,
   type Texture,
 } from 'three'
-import type {SceneObject, SceneSnapshot} from '@rune-xr/protocol'
+import type {SceneObject} from '@rune-xr/protocol'
 import {HEIGHT_SCALE, TILE_WORLD_SIZE} from '../config.js'
+import {
+  createBufferGeometryFromBuildData,
+  extractGeometryBuildData,
+  type GeometryBuildData,
+  type ObjectMeshBuildData,
+  type SceneMeshSnapshot,
+} from './MeshBuildData.js'
 import {isObjectTextureId} from './TerrainTextureAtlas.js'
 
 const LOCAL_TILE_SIZE = 128
@@ -23,11 +30,21 @@ type GeometryBuffers = {
 }
 
 export function buildObjectMeshes(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   objects: SceneObject[],
   getObjectTexture: (textureId: number) => Texture | undefined,
   hasObjectTexture: (textureId: number) => boolean,
 ) {
+  const data = buildObjectMeshData(snapshot, objects, hasObjectTexture)
+
+  return createObjectMeshesFromData(data, getObjectTexture)
+}
+
+export function buildObjectMeshData(
+  snapshot: SceneMeshSnapshot,
+  objects: SceneObject[],
+  hasObjectTexture: (textureId: number) => boolean,
+): ObjectMeshBuildData {
   const maxY = Math.max(snapshot.baseY, ...snapshot.tiles.map(tile => tile.y))
   const colorBuffers = createGeometryBuffers()
   const texturedBuffersByTexture = new Map<number, GeometryBuffers>()
@@ -36,7 +53,29 @@ export function buildObjectMeshes(
     appendObject(object, snapshot, maxY, colorBuffers, texturedBuffersByTexture, hasObjectTexture)
   }
 
-  const colorGeometry = buildColorGeometry(colorBuffers)
+  const color = buildColorGeometryData(colorBuffers)
+  const textured: ObjectMeshBuildData['textured'] = []
+
+  for (const [textureId, buffers] of texturedBuffersByTexture) {
+    const geometry = buildTexturedGeometryData(buffers)
+
+    if (!geometry) {
+      continue
+    }
+
+    textured.push({textureId, geometry})
+  }
+
+  return color
+    ? {color, textured}
+    : {textured}
+}
+
+export function createObjectMeshesFromData(
+  data: ObjectMeshBuildData,
+  getObjectTexture: (textureId: number) => Texture | undefined,
+) {
+  const colorGeometry = createBufferGeometryFromBuildData(data.color)
 
   const colorMesh = new Mesh(colorGeometry, new MeshBasicMaterial({
     vertexColors: true,
@@ -49,17 +88,19 @@ export function buildObjectMeshes(
 
   const texturedMeshes: Mesh[] = []
 
-  for (const [textureId, buffers] of texturedBuffersByTexture) {
-    const texturedGeometry = buildTexturedGeometry(buffers)
+  for (const {textureId, geometry} of data.textured) {
+    const texturedGeometry = createBufferGeometryFromBuildData(geometry)
     const texturedPositionAttribute = texturedGeometry.getAttribute('position')
 
     if (!texturedPositionAttribute || texturedPositionAttribute.count === 0) {
+      texturedGeometry.dispose()
       continue
     }
 
     const texture = getObjectTexture(textureId)
 
     if (!texture) {
+      texturedGeometry.dispose()
       continue
     }
 
@@ -87,7 +128,7 @@ export function buildObjectMeshes(
 
 function appendObject(
   object: SceneObject,
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   colorBuffers: GeometryBuffers,
   texturedBuffersByTexture: Map<number, GeometryBuffers>,
@@ -129,7 +170,7 @@ function appendObject(
 }
 
 function appendColorVertex(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   object: SceneObject,
   vertex: ObjectVertex,
@@ -141,7 +182,7 @@ function appendColorVertex(
 }
 
 function appendTexturedVertex(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   object: SceneObject,
   vertex: ObjectVertex,
@@ -156,7 +197,7 @@ function appendTexturedVertex(
 }
 
 function appendPosition(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   object: SceneObject,
   vertex: ObjectVertex,
@@ -243,25 +284,29 @@ function getTextureBuffers(texturedBuffersByTexture: Map<number, GeometryBuffers
   return buffers
 }
 
-function buildColorGeometry(buffers: GeometryBuffers) {
+function buildColorGeometryData(buffers: GeometryBuffers) {
   const geometry = new BufferGeometry()
 
   if (buffers.positions.length === 0) {
-    return geometry
+    return undefined
   }
 
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(buffers.positions), 3))
   geometry.setAttribute('color', new BufferAttribute(new Float32Array(buffers.colors), 3))
   geometry.computeVertexNormals()
 
-  return geometry
+  const data = extractGeometryBuildData(geometry)
+
+  geometry.dispose()
+
+  return data
 }
 
-function buildTexturedGeometry(buffers: GeometryBuffers) {
+function buildTexturedGeometryData(buffers: GeometryBuffers) {
   const geometry = new BufferGeometry()
 
   if (buffers.positions.length === 0) {
-    return geometry
+    return undefined
   }
 
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(buffers.positions), 3))
@@ -269,5 +314,9 @@ function buildTexturedGeometry(buffers: GeometryBuffers) {
   geometry.setAttribute('color', new BufferAttribute(new Float32Array(buffers.colors), 3))
   geometry.computeVertexNormals()
 
-  return geometry
+  const data = extractGeometryBuildData(geometry)
+
+  geometry.dispose()
+
+  return data
 }

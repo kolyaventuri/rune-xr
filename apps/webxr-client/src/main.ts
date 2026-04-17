@@ -247,7 +247,7 @@ toggleHudButton.addEventListener('click', () => {
   setHudVisible(!hudVisible);
 });
 
-globalThis.addEventListener('keydown', event => {
+globalThis.addEventListener('keydown', (event: KeyboardEvent) => {
   if (event.repeat || event.defaultPrevented || event.key.toLowerCase() !== 'h') {
     return;
   }
@@ -267,7 +267,7 @@ globalThis.addEventListener('keydown', event => {
   setHudVisible(!hudVisible);
 });
 
-globalThis.addEventListener('keydown', event => {
+globalThis.addEventListener('keydown', (event: KeyboardEvent) => {
   if (event.defaultPrevented || !controls.enabled) {
     return;
   }
@@ -313,7 +313,7 @@ globalThis.addEventListener('keydown', event => {
   }
 });
 
-globalThis.addEventListener('keyup', event => {
+globalThis.addEventListener('keyup', (event: KeyboardEvent) => {
   switch (event.key) {
     case 'ArrowLeft': {
       if (previewRotationInput.horizontal < 0) {

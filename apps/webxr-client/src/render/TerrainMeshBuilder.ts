@@ -8,8 +8,14 @@ import {
   Mesh,
   type Texture,
 } from 'three'
-import type {SceneSnapshot, Tile, TileSurfaceModel} from '@rune-xr/protocol'
+import type {Tile, TileSurfaceModel} from '@rune-xr/protocol'
 import {HEIGHT_SCALE, TILE_WORLD_SIZE} from '../config.js'
+import {
+  createBufferGeometryFromBuildData,
+  extractGeometryBuildData,
+  type SceneMeshSnapshot,
+  type TerrainMeshBuildData,
+} from './MeshBuildData.js'
 import {getTerrainTextureSlotBounds, isTerrainTextureId} from './TerrainTextureAtlas.js'
 
 const LOCAL_TILE_SIZE = 128
@@ -30,8 +36,42 @@ const TRIANGLE_EPSILON = 1e-6
 const EDGE_EPSILON = 1e-6
 const BRIDGE_DECK_COLOR = new Color('#6f675c')
 
-export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas: Texture) {
+export function buildTerrainMeshes(snapshot: SceneMeshSnapshot, terrainTextureAtlas: Texture) {
+  const data = buildTerrainMeshData(snapshot)
+
+  return createTerrainMeshesFromData(data, terrainTextureAtlas)
+}
+
+export function buildTerrainMeshData(snapshot: SceneMeshSnapshot): TerrainMeshBuildData {
   const {colorGeometry, texturedGeometry, bridgeGeometry} = buildTerrainGeometries(snapshot)
+  const color = extractGeometryBuildData(colorGeometry)
+  const textured = extractGeometryBuildData(texturedGeometry)
+  const bridge = extractGeometryBuildData(bridgeGeometry)
+  const data: TerrainMeshBuildData = {}
+
+  if (color) {
+    data.color = color
+  }
+
+  if (textured) {
+    data.textured = textured
+  }
+
+  if (bridge) {
+    data.bridge = bridge
+  }
+
+  colorGeometry.dispose()
+  texturedGeometry.dispose()
+  bridgeGeometry.dispose()
+
+  return data
+}
+
+export function createTerrainMeshesFromData(data: TerrainMeshBuildData, terrainTextureAtlas: Texture) {
+  const colorGeometry = createBufferGeometryFromBuildData(data.color)
+  const texturedGeometry = createBufferGeometryFromBuildData(data.textured)
+  const bridgeGeometry = createBufferGeometryFromBuildData(data.bridge)
   const colorMaterial = new MeshBasicMaterial({
     vertexColors: true,
     side: DoubleSide,
@@ -55,6 +95,10 @@ export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas:
     }))
     : undefined
 
+  if (!texturedMesh) {
+    texturedGeometry.dispose()
+  }
+
   if (texturedMesh) {
     texturedMesh.name = 'terrain-texture'
     texturedMesh.receiveShadow = true
@@ -70,6 +114,10 @@ export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas:
     }))
     : undefined
 
+  if (!bridgeDeckMesh) {
+    bridgeGeometry.dispose()
+  }
+
   if (bridgeDeckMesh) {
     bridgeDeckMesh.name = 'bridge-deck'
     bridgeDeckMesh.receiveShadow = true
@@ -80,15 +128,15 @@ export function buildTerrainMeshes(snapshot: SceneSnapshot, terrainTextureAtlas:
   return {colorMesh, texturedMesh, bridgeDeckMesh}
 }
 
-export function buildTerrainGeometry(snapshot: SceneSnapshot) {
+export function buildTerrainGeometry(snapshot: SceneMeshSnapshot) {
   return buildTerrainGeometries(snapshot).colorGeometry
 }
 
-export function buildTexturedTerrainGeometry(snapshot: SceneSnapshot) {
+export function buildTexturedTerrainGeometry(snapshot: SceneMeshSnapshot) {
   return buildTerrainGeometries(snapshot).texturedGeometry
 }
 
-function buildTerrainGeometries(snapshot: SceneSnapshot) {
+function buildTerrainGeometries(snapshot: SceneMeshSnapshot) {
   if (snapshot.tiles.length === 0) {
     return {
       colorGeometry: new BufferGeometry(),
@@ -197,7 +245,7 @@ function buildTexturedGeometry(buffers: GeometryBuffers) {
 }
 
 function appendFlatTile(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   a: Tile,
   b: Tile,
@@ -267,7 +315,7 @@ function resolveFaceTexture(face: TileSurfaceFace, tile: Tile) {
 }
 
 function appendModeledTile(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   tile: Tile,
   tiles: TileMap,
@@ -337,7 +385,7 @@ function appendModeledTile(
 }
 
 function appendModelVertex(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   tile: Tile,
   vertex: TileSurfaceVertex,
@@ -375,7 +423,7 @@ function resolveFaceColor(face: TileSurfaceFace, tile: Tile, minHeight: number, 
 }
 
 function appendBridgeTile(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   a: Tile,
   b: Tile,
@@ -414,7 +462,7 @@ function bridgeDeckTile(tile: Tile, fallbackHeight: number): Tile {
 }
 
 function appendModeledTileStitches(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   tile: Tile,
   tiles: TileMap,
@@ -800,7 +848,7 @@ function neighborTile(tile: Tile, side: BoundarySide, tiles: TileMap) {
 }
 
 function appendSeamQuad(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   tile: Tile,
   start: TileSurfaceVertex,
   end: TileSurfaceVertex,
@@ -815,7 +863,7 @@ function appendSeamQuad(
 }
 
 function appendTexturedSeamQuad(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   tile: Tile,
   start: TileSurfaceVertex,
   end: TileSurfaceVertex,
@@ -830,7 +878,7 @@ function appendTexturedSeamQuad(
 }
 
 function appendLocalTriangle(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   tile: Tile,
   a: TileSurfaceVertex,
@@ -855,7 +903,7 @@ function appendLocalTriangle(
 }
 
 function appendTexturedTriangle(
-  snapshot: SceneSnapshot,
+  snapshot: SceneMeshSnapshot,
   maxY: number,
   tile: Tile,
   a: TileSurfaceVertex,

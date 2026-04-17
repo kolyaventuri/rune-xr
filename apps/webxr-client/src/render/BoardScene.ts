@@ -16,8 +16,10 @@ import {
 import type {ObjectModelDefinition, SceneObject, SceneSnapshot, TextureDefinition} from '@rune-xr/protocol';
 import {ACTOR_HEIGHT, HEIGHT_SCALE, OBJECT_HEIGHT, TILE_WORLD_SIZE} from '../config.js';
 import type {InterpolatedActor} from '../world/WorldStateStore.js';
-import {buildObjectMeshes} from './ObjectMeshBuilder.js';
-import {buildTerrainMeshes} from './TerrainMeshBuilder.js';
+import {createObjectMeshesFromData} from './ObjectMeshBuilder.js';
+import type {ObjectMeshBuildData, SceneMeshSnapshot, TerrainMeshBuildData} from './MeshBuildData.js';
+import {createSceneMeshBuildRunner} from './SceneMeshBuildRunner.js';
+import {createTerrainMeshesFromData} from './TerrainMeshBuilder.js';
 import {TerrainTextureAtlas} from './TerrainTextureAtlas.js';
 
 const WALL_WEST = 1;
@@ -105,11 +107,14 @@ export class BoardScene {
   };
 
   private readonly actorNodes = new Map<string, Mesh>();
+  private readonly meshBuildRunner = createSceneMeshBuildRunner();
   private readonly objectModelStore = new Map<string, NonNullable<SceneObject['model']>>();
   private readonly terrainTextureAtlas = new TerrainTextureAtlas();
   private heightMap = new Map<string, number>();
+  private objectBuildRequestId = 0;
   private maxY = 0;
   private snapshot?: SceneSnapshot;
+  private terrainBuildRequestId = 0;
 
   constructor() {
     this.root.matrixAutoUpdate = true;
@@ -204,10 +209,66 @@ export class BoardScene {
   }
 
   private rebuildTerrain(snapshot: SceneSnapshot) {
+    const requestId = this.terrainBuildRequestId + 1;
+
+    this.terrainBuildRequestId = requestId;
+
+    const maybeBuild = this.meshBuildRunner.buildTerrain(toSceneMeshSnapshot(snapshot));
+
+    if (isPromiseLike(maybeBuild)) {
+      void maybeBuild.then(data => {
+        this.commitTerrainRebuild(requestId, snapshot, data);
+      }).catch(error => {
+        console.error('Terrain rebuild failed.', error);
+      });
+      return;
+    }
+
+    this.commitTerrainRebuild(requestId, snapshot, maybeBuild);
+  }
+
+  private rebuildObjects(objects: SceneObject[]) {
+    const resolvedObjects = objects.map(object => ({
+      ...object,
+      model: this.resolveObjectModel(object),
+    }));
+    const modelObjects = resolvedObjects.filter(object => object.model);
+    const requestId = this.objectBuildRequestId + 1;
+
+    this.objectBuildRequestId = requestId;
+
+    if (!this.snapshot) {
+      this.commitObjectRebuild(requestId, resolvedObjects, {textured: []});
+      return;
+    }
+
+    const maybeBuild = this.meshBuildRunner.buildObjects(
+      toSceneMeshSnapshot(this.snapshot),
+      modelObjects,
+      collectLoadedObjectTextureIds(modelObjects, this.terrainTextureAtlas),
+    );
+
+    if (isPromiseLike(maybeBuild)) {
+      void maybeBuild.then(data => {
+        this.commitObjectRebuild(requestId, resolvedObjects, data);
+      }).catch(error => {
+        console.error('Object rebuild failed.', error);
+      });
+      return;
+    }
+
+    this.commitObjectRebuild(requestId, resolvedObjects, maybeBuild);
+  }
+
+  private commitTerrainRebuild(requestId: number, snapshot: SceneSnapshot, data: TerrainMeshBuildData) {
+    if (requestId !== this.terrainBuildRequestId) {
+      return;
+    }
+
     this.terrainBuildCount += 1;
     disposeChildren(this.terrainGroup);
 
-    const terrain = buildTerrainMeshes(snapshot, this.terrainTextureAtlas.texture);
+    const terrain = createTerrainMeshesFromData(data, this.terrainTextureAtlas.texture);
     const xCount = new Set(snapshot.tiles.map(tile => tile.x)).size;
     const zCount = new Set(snapshot.tiles.map(tile => tile.y)).size;
     const grid = new GridHelper(
@@ -237,22 +298,17 @@ export class BoardScene {
     this.terrainGroup.add(grid);
   }
 
-  private rebuildObjects(objects: SceneObject[]) {
+  private commitObjectRebuild(requestId: number, resolvedObjects: SceneObject[], data: ObjectMeshBuildData) {
+    if (requestId !== this.objectBuildRequestId) {
+      return;
+    }
+
     disposeChildren(this.objectGroup);
 
-    const resolvedObjects = objects.map(object => ({
-      ...object,
-      model: this.resolveObjectModel(object),
-    }));
-    const modelObjects = resolvedObjects.filter(object => object.model);
-    const proxyObjects = resolvedObjects.filter(object => !object.model);
-
-    if (modelObjects.length > 0 && this.snapshot) {
-      const meshes = buildObjectMeshes(
-        this.snapshot,
-        modelObjects,
+    if (data.color || data.textured.length > 0) {
+      const meshes = createObjectMeshesFromData(
+        data,
         textureId => this.terrainTextureAtlas.getObjectTexture(textureId),
-        textureId => this.terrainTextureAtlas.hasObjectTexture(textureId),
       );
 
       this.objectGroup.add(meshes.colorMesh);
@@ -262,10 +318,11 @@ export class BoardScene {
       }
     }
 
+    const proxyObjects = resolvedObjects.filter(object => !object.model);
     const {segments, enclosedRegions} = this.collectWallData(proxyObjects);
-    this.addWallSegments(segments);
-
     const enclosedCells = new Set<string>();
+
+    this.addWallSegments(segments);
 
     for (const region of enclosedRegions) {
       for (const cell of region) {
@@ -913,6 +970,41 @@ function hashString(value: string) {
   }
 
   return hash;
+}
+
+function toSceneMeshSnapshot(snapshot: SceneSnapshot): SceneMeshSnapshot {
+  return {
+    baseX: snapshot.baseX,
+    baseY: snapshot.baseY,
+    tiles: snapshot.tiles,
+  };
+}
+
+function collectLoadedObjectTextureIds(objects: SceneObject[], terrainTextureAtlas: TerrainTextureAtlas) {
+  const loadedTextureIds = new Set<number>();
+
+  for (const object of objects) {
+    if (!object.model) {
+      continue;
+    }
+
+    for (const face of object.model.faces) {
+      if (typeof face.texture !== 'number' || !terrainTextureAtlas.hasObjectTexture(face.texture)) {
+        continue;
+      }
+
+      loadedTextureIds.add(face.texture);
+    }
+  }
+
+  return [...loadedTextureIds];
+}
+
+function isPromiseLike<T>(value: Promise<T> | T): value is Promise<T> {
+  return typeof value === 'object'
+    && value !== null
+    && 'then' in value
+    && typeof value.then === 'function';
 }
 
 function applyTransparency(material: GridHelper['material']) {
