@@ -18,18 +18,68 @@ describe('WorldStateStore', () => {
 
   it('interpolates actors between snapshots', () => {
     const store = new WorldStateStore();
+    const movingActor = sampleSceneSnapshot.actors.find(actor => actor.type === 'player');
 
     store.applySnapshot(sampleSceneSnapshot, 0);
     store.applySnapshot({
       ...sampleSceneSnapshot,
       timestamp: sampleSceneSnapshot.timestamp + 500,
-      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya' ? {...actor, x: actor.x + 2} : actor),
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === movingActor?.id
+        ? {
+          ...actor,
+          x: actor.x + 2,
+          preciseX: actor.x + 2.25,
+        }
+        : actor),
     }, 100);
 
-    const actor = store.getInterpolatedActors(225).find(entry => entry.id === 'self_kolya');
+    const actor = store.getInterpolatedActors(225).find(entry => entry.id === movingActor?.id);
 
-    expect(actor?.renderX).toBeGreaterThan(sampleSceneSnapshot.actors[0]!.x);
-    expect(actor?.renderX).toBeLessThan(sampleSceneSnapshot.actors[0]!.x + 2);
+    expect(actor?.renderX).toBeGreaterThan((movingActor?.x ?? 0) + 0.5);
+    expect(actor?.renderX).toBeLessThan((movingActor?.x ?? 0) + 2.25);
+  });
+
+  it('uses precise actor coordinates when available', () => {
+    const store = new WorldStateStore();
+
+    store.applySnapshot({
+      ...sampleSceneSnapshot,
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          preciseX: actor.x + 0.75,
+          preciseY: actor.y + 0.25,
+        }
+        : actor),
+    }, 0);
+
+    const actor = store.getInterpolatedActors(0).find(entry => entry.id === 'self_kolya');
+
+    expect(actor?.renderX).toBe(sampleSceneSnapshot.actors[0]!.x + 0.75);
+    expect(actor?.renderY).toBe(sampleSceneSnapshot.actors[0]!.y + 0.25);
+  });
+
+  it('renders the local player at the latest snapshot position without interpolation lag', () => {
+    const store = new WorldStateStore();
+
+    store.applySnapshot(sampleSceneSnapshot, 0);
+    store.applySnapshot({
+      ...sampleSceneSnapshot,
+      timestamp: sampleSceneSnapshot.timestamp + 500,
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          x: actor.x + 2,
+          preciseX: actor.x + 2.25,
+          preciseY: actor.y + 0.75,
+        }
+        : actor),
+    }, 100);
+
+    const actor = store.getInterpolatedActors(125).find(entry => entry.id === 'self_kolya');
+
+    expect(actor?.renderX).toBe(sampleSceneSnapshot.actors[0]!.x + 2.25);
+    expect(actor?.renderY).toBe(sampleSceneSnapshot.actors[0]!.y + 0.75);
   });
 
   it('rebuilds terrain when shaped tile metadata changes', () => {
@@ -170,5 +220,63 @@ describe('WorldStateStore', () => {
 
     expect(update.terrainChanged).toBe(false);
     expect(update.objectsChanged).toBe(true);
+  });
+
+  it('treats actor model metadata as a meaningful actor change', () => {
+    const store = new WorldStateStore();
+    const initialSnapshot = {
+      ...sampleSceneSnapshot,
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          modelKey: 'actor-model:a',
+        }
+        : actor),
+    };
+
+    store.applySnapshot(initialSnapshot, 0);
+    const update = store.applySnapshot({
+      ...initialSnapshot,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      actors: initialSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          modelKey: 'actor-model:b',
+        }
+        : actor),
+    }, 100);
+
+    expect(update.changed).toBe(true);
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(false);
+  });
+
+  it('treats precise actor coordinates as a meaningful actor change', () => {
+    const store = new WorldStateStore();
+    const initialSnapshot = {
+      ...sampleSceneSnapshot,
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          preciseX: actor.x + 0.5,
+        }
+        : actor),
+    };
+
+    store.applySnapshot(initialSnapshot, 0);
+    const update = store.applySnapshot({
+      ...initialSnapshot,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      actors: initialSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          preciseX: actor.x + 0.75,
+        }
+        : actor),
+    }, 100);
+
+    expect(update.changed).toBe(true);
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(false);
   });
 });

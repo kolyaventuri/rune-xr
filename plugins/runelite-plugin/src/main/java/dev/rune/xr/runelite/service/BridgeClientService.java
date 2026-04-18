@@ -2,6 +2,8 @@ package dev.rune.xr.runelite.service;
 
 import com.google.gson.Gson;
 import dev.rune.xr.runelite.config.RuneXrConfig;
+import dev.rune.xr.runelite.model.ActorModelBatchPayload;
+import dev.rune.xr.runelite.model.ActorModelDefinitionPayload;
 import dev.rune.xr.runelite.model.ObjectModelBatchPayload;
 import dev.rune.xr.runelite.model.ObjectModelDefinitionPayload;
 import dev.rune.xr.runelite.model.ProtocolMessages;
@@ -138,6 +140,29 @@ public final class BridgeClientService implements AutoCloseable
         catch (RuntimeException exception)
         {
             log.debug("Unable to send Rune XR object models to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
+            closeCurrentSocket();
+            return false;
+        }
+    }
+
+    public synchronized boolean sendActorModelBatch(RuneXrConfig config, ActorModelBatchPayload models)
+    {
+        if (models.models().isEmpty())
+        {
+            return true;
+        }
+
+        try
+        {
+            ensureConnected(config);
+            String payload = gson.toJson(ProtocolMessages.ActorModelBatchMessage.fromModels(models));
+            logActorModelBatchSend(models, payload);
+            sendMessage("actor_model_batch", payload);
+            return true;
+        }
+        catch (RuntimeException exception)
+        {
+            log.debug("Unable to send Rune XR actor models to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
             closeCurrentSocket();
             return false;
         }
@@ -376,6 +401,43 @@ public final class BridgeClientService implements AutoCloseable
         {
             log.warn(
                 "Rune XR object model batch payload exceeds OkHttp websocket queue limit (bytes={}, queueLimit={}, models={}, vertices={}, faces={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                models.models().size(),
+                vertexCount,
+                faceCount
+            );
+        }
+    }
+
+    private void logActorModelBatchSend(ActorModelBatchPayload models, String payload)
+    {
+        long payloadBytes = utf8Bytes(payload);
+        long vertexCount = 0;
+        long faceCount = 0;
+
+        for (ActorModelDefinitionPayload definition : models.models())
+        {
+            vertexCount += definition.model().vertices().size();
+            faceCount += definition.model().faces().size();
+        }
+
+        if (payloadBytes > MAX_WEBSOCKET_QUEUE_BYTES / 2)
+        {
+            log.debug(
+                "Rune XR actor model batch payload is large (bytes={}, queueLimit={}, models={}, vertices={}, faces={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                models.models().size(),
+                vertexCount,
+                faceCount
+            );
+        }
+
+        if (payloadBytes > MAX_WEBSOCKET_QUEUE_BYTES)
+        {
+            log.warn(
+                "Rune XR actor model batch payload exceeds OkHttp websocket queue limit (bytes={}, queueLimit={}, models={}, vertices={}, faces={})",
                 payloadBytes,
                 MAX_WEBSOCKET_QUEUE_BYTES,
                 models.models().size(),
@@ -702,7 +764,8 @@ public final class BridgeClientService implements AutoCloseable
         {
             return sentMessageCount < 5
                 || queueSizeBefore > 0
-                || "texture_batch".equals(kind);
+                || "texture_batch".equals(kind)
+                || "actor_model_batch".equals(kind);
         }
 
         private void markClosing()

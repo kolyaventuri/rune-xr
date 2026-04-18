@@ -60,7 +60,13 @@ export const actorSchema = z.object({
 	name: z.string().min(1).optional(),
 	x: z.number().int(),
 	y: z.number().int(),
+	preciseX: z.number().optional(),
+	preciseY: z.number().optional(),
 	plane: z.number().int().nonnegative(),
+	rotationDegrees: z.number().int().min(0).max(359).optional(),
+	size: z.number().int().positive().optional(),
+	modelKey: z.string().min(1).optional(),
+	model: tileSurfaceModelSchema.optional(),
 });
 
 export const sceneObjectSchema = z.object({
@@ -80,6 +86,11 @@ export const sceneObjectSchema = z.object({
 });
 
 export const objectModelDefinitionSchema = z.object({
+	key: z.string().min(1),
+	model: tileSurfaceModelSchema,
+});
+
+export const actorModelDefinitionSchema = z.object({
 	key: z.string().min(1),
 	model: tileSurfaceModelSchema,
 });
@@ -110,6 +121,7 @@ export type TileSurface = z.infer<typeof tileSurfaceSchema>;
 export type Actor = z.infer<typeof actorSchema>;
 export type SceneObject = z.infer<typeof sceneObjectSchema>;
 export type ObjectModelDefinition = z.infer<typeof objectModelDefinitionSchema>;
+export type ActorModelDefinition = z.infer<typeof actorModelDefinitionSchema>;
 export type SceneSnapshot = z.infer<typeof sceneSnapshotSchema>;
 export type TextureDefinition = z.infer<typeof textureDefinitionSchema>;
 export type ActorType = z.infer<typeof actorTypeSchema>;

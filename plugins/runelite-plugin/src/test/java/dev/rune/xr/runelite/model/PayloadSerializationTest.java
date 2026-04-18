@@ -36,4 +36,29 @@ class PayloadSerializationTest
         assertTrue(!json.contains("\"textures\":{\"textures\""));
         assertTrue(json.contains("\"pngBase64\":\"Zm9v\""));
     }
+
+    @Test
+    void serializesActorModelBatch()
+    {
+        ActorModelBatchPayload batch = new ActorModelBatchPayload(List.of(
+            new ActorModelDefinitionPayload(
+                "actor-model:test",
+                new TileSurfaceModelPayload(
+                    List.of(
+                        new TileSurfaceVertexPayload(-16, 0, -8),
+                        new TileSurfaceVertexPayload(16, 0, -8),
+                        new TileSurfaceVertexPayload(0, 64, 12)
+                    ),
+                    List.of(
+                        new TileSurfaceFacePayload(0, 1, 2, 0x4478c8, null, null, null, null, null, null, null, null, null, null)
+                    )
+                )
+            )
+        ));
+        String json = gson.toJson(ProtocolMessages.ActorModelBatchMessage.fromModels(batch));
+
+        assertTrue(json.contains("\"kind\":\"actor_model_batch\""));
+        assertTrue(json.contains("\"models\":[{"));
+        assertTrue(!json.contains("\"models\":{\"models\""));
+    }
 }

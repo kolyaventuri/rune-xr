@@ -13,6 +13,8 @@ import dev.rune.xr.runelite.model.TileSurfaceVertexPayload;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -51,6 +53,7 @@ public final class SceneExtractor
     static final int LOCAL_TILE_SIZE = 128;
     static final int HALF_TILE_SIZE = LOCAL_TILE_SIZE / 2;
     static final int TEXTURE_SIZE = 128;
+    static final int MAX_CACHED_ACTOR_MODELS = 1024;
     static final int MAX_CACHED_OBJECT_MODELS = 2048;
 
     private record RenderablePlacement(Renderable renderable, int orientation, int offsetX, int offsetY)
@@ -67,6 +70,14 @@ public final class SceneExtractor
 
     private final Client client;
     private final Map<Integer, Integer> textureColorCache = new HashMap<>();
+    private final Map<String, TileSurfaceModelPayload> actorModelCache = new LinkedHashMap<>(128, 0.75f, true)
+    {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, TileSurfaceModelPayload> eldest)
+        {
+            return size() > MAX_CACHED_ACTOR_MODELS;
+        }
+    };
     private final Map<StaticObjectModelKey, TileSurfaceModelPayload> objectModelCache = new LinkedHashMap<>(256, 0.75f, true)
     {
         @Override
@@ -90,8 +101,14 @@ public final class SceneExtractor
             return Optional.empty();
         }
 
-        WorldPoint origin = localPlayer.getWorldLocation();
         int plane = client.getPlane();
+        WorldPoint origin = resolveActorWorldPoint(localPlayer, plane);
+
+        if (origin == null)
+        {
+            return Optional.empty();
+        }
+
         int baseX = origin.getX() - radius;
         int baseY = origin.getY() - radius;
         List<TilePayload> tiles = collectTiles(baseX, baseY, radius, plane);
@@ -228,27 +245,46 @@ public final class SceneExtractor
 
         if (localPlayer != null)
         {
-            addActorPayload(actors, localPlayer, "self", plane, true);
+            WorldPoint point = resolveActorWorldPoint(localPlayer, plane);
+
+            if (withinRadius(origin, point, radius))
+            {
+                addActorPayload(actors, localPlayer, point, "self", plane, true);
+            }
         }
 
         for (Player player : client.getPlayers())
         {
-            if (player == null || player == localPlayer || !withinRadius(origin, player.getWorldLocation(), radius))
+            if (player == null || player == localPlayer)
             {
                 continue;
             }
 
-            addActorPayload(actors, player, "player", plane, true);
+            WorldPoint point = resolveActorWorldPoint(player, plane);
+
+            if (!withinRadius(origin, point, radius))
+            {
+                continue;
+            }
+
+            addActorPayload(actors, player, point, "player", plane, true);
         }
 
         for (NPC npc : client.getNpcs())
         {
-            if (npc == null || !withinRadius(origin, npc.getWorldLocation(), radius))
+            if (npc == null)
             {
                 continue;
             }
 
-            addActorPayload(actors, npc, "npc", plane, false);
+            WorldPoint point = resolveActorWorldPoint(npc, plane);
+
+            if (!withinRadius(origin, point, radius))
+            {
+                continue;
+            }
+
+            addActorPayload(actors, npc, point, "npc", plane, false);
         }
 
         return actors;
@@ -574,6 +610,11 @@ public final class SceneExtractor
         return normalizeQuarterTurnDegrees(Math.round((float) orientation / 512F));
     }
 
+    static Integer normalizeActorRotationDegrees(int orientation)
+    {
+        return Math.floorMod(Math.round((float) orientation * 360F / 2048F), 360);
+    }
+
     static Integer normalizeQuarterTurnDegrees(int quarterTurns)
     {
         int normalized = Math.floorMod(quarterTurns, 4);
@@ -844,13 +885,30 @@ public final class SceneExtractor
         );
     }
 
-    private void addActorPayload(List<ActorPayload> actors, Actor actor, String type, int plane, boolean preferName)
+    private void addActorPayload(List<ActorPayload> actors, Actor actor, WorldPoint point, String type, int plane, boolean preferName)
     {
-        WorldPoint point = actor.getWorldLocation();
         String name = preferName ? actor.getName() : actor.getName() != null ? actor.getName() : "NPC";
         String actorId = buildActorId(actor, type, name);
+        String modelKey = actorModelKey(actor);
+        TileSurfaceModelPayload model = extractActorModel(actor, modelKey);
+        LocalPoint localPoint = actor.getLocalLocation();
+        Double preciseX = localPoint == null ? null : preciseTileCoordinate(point.getX(), localPoint.getX());
+        Double preciseY = localPoint == null ? null : preciseTileCoordinate(point.getY(), localPoint.getY());
 
-        actors.add(new ActorPayload(actorId, type, name, point.getX(), point.getY(), plane));
+        actors.add(new ActorPayload(
+            actorId,
+            type,
+            name,
+            point.getX(),
+            point.getY(),
+            plane,
+            preciseX,
+            preciseY,
+            normalizeActorRotationDegrees(actor.getCurrentOrientation()),
+            normalizePositiveSize(actor.getFootprintSize()),
+            model == null ? null : modelKey,
+            model
+        ));
     }
 
     private String buildActorId(Actor actor, String type, String name)
@@ -868,9 +926,247 @@ public final class SceneExtractor
         return type + "_" + sanitizeName(name);
     }
 
+    private WorldPoint resolveActorWorldPoint(Actor actor, int plane)
+    {
+        if (actor == null)
+        {
+            return null;
+        }
+
+        LocalPoint localPoint = actor.getLocalLocation();
+
+        if (localPoint != null)
+        {
+            return WorldPoint.fromLocalInstance(client, localPoint, plane);
+        }
+
+        return actor.getWorldLocation();
+    }
+
+    static double preciseTileCoordinate(int worldCoordinate, int localCoordinate)
+    {
+        return worldCoordinate + (double) Math.floorMod(localCoordinate, LOCAL_TILE_SIZE) / LOCAL_TILE_SIZE;
+    }
+
+    private TileSurfaceModelPayload extractActorModel(Actor actor, String cacheKey)
+    {
+        if (cacheKey != null)
+        {
+            TileSurfaceModelPayload cachedModel = actorModelCache.get(cacheKey);
+
+            if (cachedModel != null)
+            {
+                return cachedModel;
+            }
+        }
+
+        LocalPoint reference = actor.getLocalLocation();
+        Model model = resolveRenderableModel(actor);
+
+        if (reference == null || model == null)
+        {
+            return null;
+        }
+
+        TileSurfaceModelPayload extractedModel = extractActorModel(model, reference.getX(), reference.getY());
+
+        if (cacheKey != null && extractedModel != null)
+        {
+            actorModelCache.put(cacheKey, extractedModel);
+        }
+
+        return extractedModel;
+    }
+
+    private TileSurfaceModelPayload extractActorModel(Model model, int referenceOriginX, int referenceOriginZ)
+    {
+        float[] vertexX = model.getVerticesX();
+        float[] vertexY = model.getVerticesY();
+        float[] vertexZ = model.getVerticesZ();
+        int[] indices1 = model.getFaceIndices1();
+        int[] indices2 = model.getFaceIndices2();
+        int[] indices3 = model.getFaceIndices3();
+
+        if (vertexX == null || vertexY == null || vertexZ == null || indices1 == null || indices2 == null || indices3 == null)
+        {
+            return null;
+        }
+
+        int vertexCount = Math.min(vertexX.length, Math.min(vertexY.length, vertexZ.length));
+        int faceCount = Math.min(indices1.length, Math.min(indices2.length, indices3.length));
+
+        if (vertexCount == 0 || faceCount == 0)
+        {
+            return null;
+        }
+
+        List<TileSurfaceVertexPayload> vertices = new ArrayList<>(vertexCount);
+        List<TileSurfaceFacePayload> faces = new ArrayList<>(faceCount);
+
+        for (int index = 0; index < vertexCount; index += 1)
+        {
+            vertices.add(new TileSurfaceVertexPayload(
+                Math.round(referenceOriginX + vertexX[index]) - referenceOriginX,
+                normalizeTileHeight(Math.round(vertexY[index])),
+                Math.round(referenceOriginZ + vertexZ[index]) - referenceOriginZ
+            ));
+        }
+
+        int[] color1s = model.getFaceColors1();
+        int[] color2s = model.getFaceColors2();
+        int[] color3s = model.getFaceColors3();
+        short[] faceTextures = model.getFaceTextures();
+
+        for (int faceIndex = 0; faceIndex < faceCount; faceIndex += 1)
+        {
+            TileSurfaceFacePayload face = extractModelFace(model, color1s, color2s, color3s, faceTextures, faceIndex, 0, vertexCount);
+
+            if (face != null)
+            {
+                faces.add(face);
+            }
+        }
+
+        return faces.isEmpty() ? null : new TileSurfaceModelPayload(vertices, faces);
+    }
+
+    private String actorModelKey(Actor actor)
+    {
+        if (actor instanceof Player player)
+        {
+            return playerModelKey(player);
+        }
+
+        if (actor instanceof NPC npc)
+        {
+            return npcModelKey(npc);
+        }
+
+        return "actor-model:actor:" + sanitizeName(actor.getName() == null ? "actor" : actor.getName());
+    }
+
+    private String playerModelKey(Player player)
+    {
+        try
+        {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            var composition = player.getPlayerComposition();
+
+            if (composition == null)
+            {
+                updateDigest(digest, player.getId());
+                return "actor-model:player:" + toHex(digest.digest());
+            }
+
+            updateDigest(digest, composition.getGender());
+            updateDigest(digest, composition.getTransformedNpcId());
+            updateDigest(digest, composition.getEquipmentIds());
+            updateDigest(digest, composition.getColors());
+            return "actor-model:player:" + toHex(digest.digest());
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private String npcModelKey(NPC npc)
+    {
+        try
+        {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            var composition = npc.getTransformedComposition();
+
+            if (composition == null)
+            {
+                composition = npc.getComposition();
+            }
+
+            updateDigest(digest, composition == null ? npc.getId() : composition.getId());
+
+            if (composition != null)
+            {
+                updateDigest(digest, composition.getModels());
+                updateDigest(digest, composition.getColorToReplace());
+                updateDigest(digest, composition.getColorToReplaceWith());
+                updateDigest(digest, composition.getWidthScale());
+                updateDigest(digest, composition.getHeightScale());
+            }
+
+            var overrides = npc.getModelOverrides();
+
+            if (overrides != null)
+            {
+                updateDigest(digest, overrides.getModelIds());
+                updateDigest(digest, overrides.getColorToReplaceWith());
+                updateDigest(digest, overrides.getTextureToReplaceWith());
+                updateDigest(digest, overrides.useLocalPlayer() ? 1 : 0);
+            }
+
+            return "actor-model:npc:" + toHex(digest.digest());
+        }
+        catch (NoSuchAlgorithmException exception)
+        {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
     private String sanitizeName(String name)
     {
         return name.toLowerCase().replaceAll("[^a-z0-9]+", "_");
+    }
+
+    private static void updateDigest(MessageDigest digest, int[] values)
+    {
+        if (values == null)
+        {
+            updateDigest(digest, -1);
+            return;
+        }
+
+        updateDigest(digest, values.length);
+
+        for (int value : values)
+        {
+            updateDigest(digest, value);
+        }
+    }
+
+    private static void updateDigest(MessageDigest digest, short[] values)
+    {
+        if (values == null)
+        {
+            updateDigest(digest, -1);
+            return;
+        }
+
+        updateDigest(digest, values.length);
+
+        for (short value : values)
+        {
+            updateDigest(digest, value);
+        }
+    }
+
+    private static void updateDigest(MessageDigest digest, int value)
+    {
+        digest.update((byte) (value >>> 24));
+        digest.update((byte) (value >>> 16));
+        digest.update((byte) (value >>> 8));
+        digest.update((byte) value);
+    }
+
+    private static String toHex(byte[] bytes)
+    {
+        StringBuilder builder = new StringBuilder(bytes.length * 2);
+
+        for (byte value : bytes)
+        {
+            builder.append(Character.forDigit((value >>> 4) & 0xf, 16));
+            builder.append(Character.forDigit(value & 0xf, 16));
+        }
+
+        return builder.toString();
     }
 
     private boolean withinRadius(WorldPoint origin, WorldPoint point, int radius)

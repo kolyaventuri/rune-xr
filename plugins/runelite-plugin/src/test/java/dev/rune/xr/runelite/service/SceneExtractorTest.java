@@ -26,6 +26,13 @@ class SceneExtractorTest
     }
 
     @Test
+    void preservesSubTilePrecisionFromLocalCoordinates()
+    {
+        assertEquals(3200.5d, SceneExtractor.preciseTileCoordinate(3200, 64));
+        assertEquals(3200.9921875d, SceneExtractor.preciseTileCoordinate(3200, 127));
+    }
+
+    @Test
     void convertsPackedHslColorsToRgb()
     {
         assertEquals(0x000000, SceneExtractor.packedHslToRgb(0));

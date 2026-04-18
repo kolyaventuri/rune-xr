@@ -5,11 +5,14 @@ import {fileURLToPath} from 'node:url';
 import express from 'express';
 import {
   createAckMessage,
+  createActorModelBatchMessage,
   createErrorMessage,
   createObjectModelBatchMessage,
   createTextureBatchMessage,
   parseProtocolMessage,
   type AckMessage,
+  type ActorModelBatchMessage,
+  type ActorModelDefinition,
   type HelloMessage,
   type ObjectModelBatchMessage,
   type ObjectModelDefinition,
@@ -143,6 +146,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   const server = createServer(app);
   const webSocketServer = new WebSocketServer({server, path: '/ws'});
   const clients = new Set<WebSocket>();
+  const actorModels = new Map<string, ActorModelDefinition>();
   const objectModels = new Map<string, ObjectModelDefinition>();
   const textureDefinitions = new Map<number, TextureDefinition>();
   let pluginSocket: WebSocket | undefined;
@@ -193,6 +197,16 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     sendMessage(socket, createTextureBatchMessage([...textureDefinitions.values()]));
   };
 
+  const sendActorModelReplay = (socket: WebSocket) => {
+    if (actorModels.size === 0) {
+      return;
+    }
+
+    for (const batch of partitionActorModels([...actorModels.values()])) {
+      sendMessage(socket, createActorModelBatchMessage(batch));
+    }
+  };
+
   const sendObjectModelReplay = (socket: WebSocket) => {
     if (objectModels.size === 0) {
       return;
@@ -228,6 +242,22 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
 
     for (const model of models) {
       objectModels.set(model.key, model);
+    }
+
+    for (const client of clients) {
+      sendMessage(client, message);
+    }
+  };
+
+  const broadcastActorModelBatch = (models: ActorModelDefinition[]) => {
+    if (models.length === 0) {
+      return;
+    }
+
+    const message = createActorModelBatchMessage(models);
+
+    for (const model of models) {
+      actorModels.set(model.key, model);
     }
 
     for (const client of clients) {
@@ -272,6 +302,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     clients.add(socket);
     sendMessage(socket, createAckMessage('hello', 'client_connected'));
     logger.info(`Client connected to bridge (${describeSocket(socket)}, source=${message.source ?? 'unknown'}, protocolVersion=${message.protocolVersion})`);
+    sendActorModelReplay(socket);
     sendObjectModelReplay(socket);
     sendTextureReplay(socket);
     if (latestSnapshot) {
@@ -386,6 +417,13 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
         return;
       }
 
+      if (message.kind === 'actor_model_batch') {
+        const actorModelMessage: ActorModelBatchMessage = message;
+
+        broadcastActorModelBatch(actorModelMessage.models);
+        return;
+      }
+
       const sceneMessage: SceneSnapshotMessage = message;
 
       latestSnapshot = sceneMessage.snapshot;
@@ -452,7 +490,36 @@ function partitionObjectModels(models: ObjectModelDefinition[]) {
   return batches;
 }
 
+function partitionActorModels(models: ActorModelDefinition[]) {
+  const batches: ActorModelDefinition[][] = [];
+  let currentBatch: ActorModelDefinition[] = [];
+  let currentChars = 0;
+
+  for (const model of models) {
+    const estimatedChars = estimateActorModelDefinitionChars(model);
+
+    if (currentBatch.length > 0 && currentChars + estimatedChars > MAX_OBJECT_MODEL_BATCH_CHARS) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentChars = 0;
+    }
+
+    currentBatch.push(model);
+    currentChars += estimatedChars;
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+}
+
 function estimateObjectModelDefinitionChars(model: ObjectModelDefinition) {
+  return JSON.stringify(model).length + 64;
+}
+
+function estimateActorModelDefinitionChars(model: ActorModelDefinition) {
   return JSON.stringify(model).length + 64;
 }
 

@@ -41,4 +41,12 @@ public final class ProtocolMessages
             return new ObjectModelBatchMessage("object_model_batch", models.models());
         }
     }
+
+    public record ActorModelBatchMessage(String kind, List<ActorModelDefinitionPayload> models)
+    {
+        public static ActorModelBatchMessage fromModels(ActorModelBatchPayload models)
+        {
+            return new ActorModelBatchMessage("actor_model_batch", models.models());
+        }
+    }
 }

@@ -1,5 +1,6 @@
 import {
   createHelloMessage,
+  type ActorModelDefinition,
   parseProtocolMessage,
   type ObjectModelDefinition,
   type ProtocolMessage,
@@ -8,6 +9,7 @@ import {
 } from '@rune-xr/protocol';
 
 type BridgeSocketClientOptions = {
+  onActorModelBatch: (models: ActorModelDefinition[]) => void;
   onObjectModelBatch: (models: ObjectModelDefinition[]) => void;
   onSnapshot: (snapshot: SceneSnapshot) => void;
   onTextureBatch: (textures: TextureDefinition[]) => void;
@@ -75,6 +77,11 @@ export class BridgeSocketClient {
 
     if (message.kind === 'object_model_batch') {
       this.options.onObjectModelBatch(message.models);
+      return;
+    }
+
+    if (message.kind === 'actor_model_batch') {
+      this.options.onActorModelBatch(message.models);
       return;
     }
 

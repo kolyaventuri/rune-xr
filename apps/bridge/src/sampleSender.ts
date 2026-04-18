@@ -63,24 +63,38 @@ function createSyntheticSnapshot(tick: number): SceneSnapshot {
   base.timestamp = Date.now();
   base.actors = base.actors.map(actor => {
     if (actor.type === 'self') {
+      const nextX = actor.x + (xOffset > 1 ? -1 : xOffset);
+      const nextY = actor.y + (yOffset > 1 ? -1 : yOffset);
+
       return {
         ...actor,
-        x: actor.x + (xOffset > 1 ? -1 : xOffset),
-        y: actor.y + (yOffset > 1 ? -1 : yOffset),
+        x: nextX,
+        y: nextY,
+        preciseX: nextX + 0.5,
+        preciseY: nextY + 0.5,
       };
     }
 
     if (actor.type === 'npc') {
+      const nextX = actor.x - (xOffset > 1 ? 1 : 0);
+      const nextY = actor.y + (tick % 2);
+
       return {
         ...actor,
-        x: actor.x - (xOffset > 1 ? 1 : 0),
-        y: actor.y + (tick % 2),
+        x: nextX,
+        y: nextY,
+        preciseX: nextX + 0.5,
+        preciseY: nextY + 0.5,
       };
     }
 
+    const nextY = actor.y - (tick % 2);
+
     return {
       ...actor,
-      y: actor.y - (tick % 2),
+      y: nextY,
+      preciseX: actor.x + 0.5,
+      preciseY: nextY + 0.5,
     };
   });
 

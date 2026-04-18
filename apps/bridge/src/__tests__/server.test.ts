@@ -1,10 +1,12 @@
 import net from 'node:net';
 import {afterEach, describe, expect, it} from 'vitest';
 import {
+  createActorModelBatchMessage,
   createHelloMessage,
   createObjectModelBatchMessage,
   createTextureBatchMessage,
   sampleSceneSnapshot,
+  type ActorModelBatchMessage,
   type ObjectModelBatchMessage,
   type ProtocolMessage,
   type SceneSnapshotMessage,
@@ -55,6 +57,26 @@ describe('bridge server', () => {
         animationSpeed: 2,
       },
     ]);
+    const actorModelMessage: ActorModelBatchMessage = createActorModelBatchMessage([
+      {
+        key: 'actor-model:player',
+        model: {
+          vertices: [
+            {x: -16, y: 0, z: -16},
+            {x: 16, y: 0, z: -16},
+            {x: 0, y: 64, z: 12},
+          ],
+          faces: [
+            {
+              a: 0,
+              b: 1,
+              c: 2,
+              rgb: 0x88aaee,
+            },
+          ],
+        },
+      },
+    ]);
     const objectModelMessage: ObjectModelBatchMessage = createObjectModelBatchMessage([
       {
         key: 'object-model:wall',
@@ -94,13 +116,22 @@ describe('bridge server', () => {
             modelKey: 'object-model:wall',
           }
           : object),
+        actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+          ? {
+            ...actor,
+            modelKey: 'actor-model:player',
+            model: undefined,
+          }
+          : actor),
       },
     };
 
+    plugin.socket.send(JSON.stringify(actorModelMessage));
     plugin.socket.send(JSON.stringify(objectModelMessage));
     plugin.socket.send(JSON.stringify(textureMessage));
     plugin.socket.send(JSON.stringify(sceneMessage));
 
+    expect(await client.waitForKind('actor_model_batch')).toEqual(actorModelMessage);
     expect(await client.waitForKind('object_model_batch')).toEqual(objectModelMessage);
     expect(await client.waitForKind('texture_batch')).toEqual(textureMessage);
     const received = await client.waitForKind('scene_snapshot');
@@ -108,9 +139,13 @@ describe('bridge server', () => {
 
     laterClient.socket.send(JSON.stringify(createHelloMessage('client', 'late-client')));
     await laterClient.waitForKind('ack');
+    expect(await laterClient.waitForKind('actor_model_batch')).toEqual(actorModelMessage);
     expect(await laterClient.waitForKind('object_model_batch')).toEqual(objectModelMessage);
     expect(await laterClient.waitForKind('texture_batch')).toEqual(textureMessage);
     expect(await laterClient.waitForKind('scene_snapshot')).toEqual(sceneMessage);
+    expect(laterClient.receivedKinds().indexOf('actor_model_batch')).toBeLessThan(
+      laterClient.receivedKinds().indexOf('scene_snapshot'),
+    );
     expect(laterClient.receivedKinds().indexOf('object_model_batch')).toBeLessThan(
       laterClient.receivedKinds().indexOf('scene_snapshot'),
     );

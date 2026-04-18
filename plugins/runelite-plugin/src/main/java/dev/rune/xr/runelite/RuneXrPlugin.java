@@ -3,6 +3,9 @@ package dev.rune.xr.runelite;
 import com.google.gson.Gson;
 import com.google.inject.Provides;
 import dev.rune.xr.runelite.config.RuneXrConfig;
+import dev.rune.xr.runelite.model.ActorModelBatchPayload;
+import dev.rune.xr.runelite.model.ActorModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ActorPayload;
 import dev.rune.xr.runelite.model.ObjectModelBatchPayload;
 import dev.rune.xr.runelite.model.ObjectModelDefinitionPayload;
 import dev.rune.xr.runelite.model.SceneSnapshotState;
@@ -14,6 +17,11 @@ import dev.rune.xr.runelite.model.TileSurfaceModelPayload;
 import dev.rune.xr.runelite.service.BridgeClientService;
 import dev.rune.xr.runelite.service.SceneExtractor;
 import dev.rune.xr.runelite.service.SyntheticSceneFactory;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -27,13 +35,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import javax.inject.Inject;
+import net.runelite.api.AABB;
 import net.runelite.api.Client;
+import net.runelite.api.Model;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,6 +63,7 @@ public class RuneXrPlugin extends Plugin
     static final int MAX_OBJECT_MODEL_BATCH_CHARS = 500_000;
     static final int MAX_OBJECT_MODEL_BATCHES_PER_TICK = 4;
     static final int MAX_TEXTURE_BATCH_CHARS = 250_000;
+    private static final int COORDINATE_DUMP_TILE_RADIUS = 1;
 
     @Inject
     private Client client;
@@ -69,6 +82,7 @@ public class RuneXrPlugin extends Plugin
     private SceneExtractor sceneExtractor;
     private SyntheticSceneFactory syntheticSceneFactory;
     private SceneSnapshotState lastSnapshotState;
+    private final Set<String> sentActorModelKeys = new LinkedHashSet<>();
     private final Set<String> sentObjectModelKeys = new LinkedHashSet<>();
     private final Set<Integer> sentTextureIds = new LinkedHashSet<>();
     private final AtomicBoolean snapshotScheduled = new AtomicBoolean();
@@ -79,6 +93,7 @@ public class RuneXrPlugin extends Plugin
         bridgeClient = new BridgeClientService(gson);
         sceneExtractor = new SceneExtractor(client);
         syntheticSceneFactory = new SyntheticSceneFactory();
+        initializeCoordinateDump();
         clearSentState();
         startSnapshotLoop();
     }
@@ -116,6 +131,7 @@ public class RuneXrPlugin extends Plugin
                     bridgeClient.resetConnection();
                 }
             }
+            case "coordinateDumpEnabled", "coordinateDumpPath" -> initializeCoordinateDump();
             case "updateRateMs" -> startSnapshotLoop();
             default ->
             {
@@ -178,11 +194,22 @@ public class RuneXrPlugin extends Plugin
 
     private void sendIfChanged(SceneSnapshotPayload snapshot)
     {
-        SnapshotTransportBundle transportBundle = splitObjectModels(snapshot);
+        SnapshotTransportBundle transportBundle = splitModels(snapshot);
         SceneSnapshotState snapshotState = SceneSnapshotState.fromSnapshot(transportBundle.snapshot());
         boolean shouldSendSnapshot = !snapshotState.equals(lastSnapshotState) || !bridgeClient.isConnected(config);
 
-        if (!sendPendingObjectModels(transportBundle.modelDefinitions()))
+        if (shouldSendSnapshot)
+        {
+            maybeDumpCoordinates(snapshot);
+        }
+
+        if (!sendPendingActorModels(transportBundle.actorModelDefinitions()))
+        {
+            clearSentState();
+            return;
+        }
+
+        if (!sendPendingObjectModels(transportBundle.objectModelDefinitions()))
         {
             clearSentState();
             return;
@@ -201,7 +228,326 @@ public class RuneXrPlugin extends Plugin
             lastSnapshotState = SceneSnapshotState.fromSnapshot(transportSnapshot);
         }
 
-        sendPendingTextures(transportBundle.snapshot(), transportBundle.modelDefinitions());
+        sendPendingTextures(transportBundle.snapshot(), transportBundle.objectModelDefinitions());
+    }
+
+    private boolean sendPendingActorModels(List<ActorModelDefinitionPayload> modelDefinitions)
+    {
+        if (modelDefinitions.isEmpty())
+        {
+            return true;
+        }
+
+        LinkedHashMap<String, ActorModelDefinitionPayload> pendingDefinitions = new LinkedHashMap<>();
+
+        for (ActorModelDefinitionPayload definition : modelDefinitions)
+        {
+            if (!sentActorModelKeys.contains(definition.key()))
+            {
+                pendingDefinitions.putIfAbsent(definition.key(), definition);
+            }
+        }
+
+        if (pendingDefinitions.isEmpty())
+        {
+            return true;
+        }
+
+        List<List<ActorModelDefinitionPayload>> batches = partitionActorModelDefinitions(
+            gson,
+            new ArrayList<>(pendingDefinitions.values())
+        );
+
+        int sentBatches = 0;
+
+        for (List<ActorModelDefinitionPayload> batch : batches)
+        {
+            if (sentBatches >= MAX_OBJECT_MODEL_BATCHES_PER_TICK)
+            {
+                break;
+            }
+
+            if (!bridgeClient.sendActorModelBatch(config, new ActorModelBatchPayload(batch)))
+            {
+                return false;
+            }
+
+            for (ActorModelDefinitionPayload definition : batch)
+            {
+                sentActorModelKeys.add(definition.key());
+            }
+
+            sentBatches += 1;
+        }
+
+        if (sentBatches > 0)
+        {
+            log.debug(
+                "Rune XR pending actor models: uniqueModels={}, batches={}, sentBatches={}",
+                pendingDefinitions.size(),
+                batches.size(),
+                sentBatches
+            );
+        }
+
+        return true;
+    }
+
+    private void initializeCoordinateDump()
+    {
+        Path path = coordinateDumpPath();
+
+        if (path == null)
+        {
+            return;
+        }
+
+        try
+        {
+            Path parent = path.getParent();
+
+            if (parent != null)
+            {
+                Files.createDirectories(parent);
+            }
+
+            if (config.coordinateDumpEnabled())
+            {
+                Files.writeString(path, "", StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                log.info("Rune XR coordinate dump enabled: {}", path);
+            }
+        }
+        catch (IOException exception)
+        {
+            log.warn("Unable to initialize Rune XR coordinate dump at {}", path, exception);
+        }
+    }
+
+    private void maybeDumpCoordinates(SceneSnapshotPayload snapshot)
+    {
+        if (!config.coordinateDumpEnabled())
+        {
+            return;
+        }
+
+        Path path = coordinateDumpPath();
+
+        if (path == null)
+        {
+            return;
+        }
+
+        ActorPayload self = snapshot.actors().stream()
+            .filter(actor -> "self".equals(actor.type()))
+            .findFirst()
+            .orElse(null);
+
+        if (self == null)
+        {
+            return;
+        }
+
+        var localPlayer = client.getLocalPlayer();
+        LocalPoint localPoint = localPlayer == null ? null : localPlayer.getLocalLocation();
+        WorldPoint renderedWorldPoint = localPoint == null ? null : WorldPoint.fromLocalInstance(client, localPoint, client.getPlane());
+        WorldPoint serverWorldPoint = localPlayer == null ? null : localPlayer.getWorldLocation();
+        Model liveModel = localPlayer == null ? null : localPlayer.getModel();
+        AABB liveModelBounds = liveModel == null ? null : liveModel.getAABB(localPlayer.getCurrentOrientation());
+        CoordinateDumpRecord record = new CoordinateDumpRecord(
+            System.currentTimeMillis(),
+            snapshot.baseX(),
+            snapshot.baseY(),
+            snapshot.plane(),
+            new DumpActor(
+                self.id(),
+                self.name(),
+                self.x(),
+                self.y(),
+                self.preciseX(),
+                self.preciseY(),
+                self.rotationDegrees(),
+                self.size(),
+                self.modelKey(),
+                boundsForModel(self.model())
+            ),
+            localPoint == null ? null : new DumpLocalPoint(
+                localPoint.getX(),
+                localPoint.getY(),
+                localPoint.getSceneX(),
+                localPoint.getSceneY()
+            ),
+            pointDump(renderedWorldPoint),
+            pointDump(serverWorldPoint),
+            liveModelBounds == null ? null : new DumpAabb(
+                liveModelBounds.getCenterX(),
+                liveModelBounds.getCenterY(),
+                liveModelBounds.getCenterZ(),
+                liveModelBounds.getExtremeX(),
+                liveModelBounds.getExtremeY(),
+                liveModelBounds.getExtremeZ()
+            ),
+            nearbyTiles(snapshot, self.x(), self.y(), COORDINATE_DUMP_TILE_RADIUS)
+        );
+
+        try
+        {
+            Files.writeString(
+                path,
+                gson.toJson(record) + System.lineSeparator(),
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND
+            );
+        }
+        catch (IOException exception)
+        {
+            log.warn("Unable to append Rune XR coordinate dump to {}", path, exception);
+        }
+    }
+
+    private Path coordinateDumpPath()
+    {
+        String configuredPath = config.coordinateDumpPath();
+
+        if (configuredPath == null || configuredPath.isBlank())
+        {
+            return null;
+        }
+
+        return Path.of(configuredPath.trim());
+    }
+
+    private static DumpPoint pointDump(WorldPoint point)
+    {
+        if (point == null)
+        {
+            return null;
+        }
+
+        return new DumpPoint(point.getX(), point.getY(), point.getPlane());
+    }
+
+    private static DumpModelBounds boundsForModel(TileSurfaceModelPayload model)
+    {
+        if (model == null || model.vertices().isEmpty())
+        {
+            return null;
+        }
+
+        int minX = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE;
+        int maxY = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE;
+        int maxZ = Integer.MIN_VALUE;
+
+        for (var vertex : model.vertices())
+        {
+            minX = Math.min(minX, vertex.x());
+            maxX = Math.max(maxX, vertex.x());
+            minY = Math.min(minY, vertex.y());
+            maxY = Math.max(maxY, vertex.y());
+            minZ = Math.min(minZ, vertex.z());
+            maxZ = Math.max(maxZ, vertex.z());
+        }
+
+        return new DumpModelBounds(
+            minX,
+            maxX,
+            (minX + maxX) / 2.0d,
+            minY,
+            maxY,
+            minZ,
+            maxZ,
+            (minZ + maxZ) / 2.0d,
+            model.vertices().size()
+        );
+    }
+
+    private static List<DumpTile> nearbyTiles(SceneSnapshotPayload snapshot, int centerX, int centerY, int radius)
+    {
+        return snapshot.tiles().stream()
+            .filter(tile -> Math.abs(tile.x() - centerX) <= radius && Math.abs(tile.y() - centerY) <= radius)
+            .sorted((left, right) ->
+            {
+                int byY = Integer.compare(right.y(), left.y());
+
+                if (byY != 0)
+                {
+                    return byY;
+                }
+
+                return Integer.compare(left.x(), right.x());
+            })
+            .map(tile -> new DumpTile(
+                tile.x(),
+                tile.y(),
+                tile.height(),
+                tile.surface() != null && tile.surface().hasBridge(),
+                tile.surface() == null ? null : tile.surface().bridgeHeight(),
+                tile.surface() == null ? null : tile.surface().renderLevel()
+            ))
+            .toList();
+    }
+
+    private record CoordinateDumpRecord(
+        long capturedAt,
+        int baseX,
+        int baseY,
+        int plane,
+        DumpActor self,
+        DumpLocalPoint localPoint,
+        DumpPoint renderedWorldPoint,
+        DumpPoint serverWorldPoint,
+        DumpAabb liveModelAabb,
+        List<DumpTile> nearbyTiles
+    )
+    {
+    }
+
+    private record DumpActor(
+        String id,
+        String name,
+        int x,
+        int y,
+        Double preciseX,
+        Double preciseY,
+        Integer rotationDegrees,
+        Integer size,
+        String modelKey,
+        DumpModelBounds extractedModelBounds
+    )
+    {
+    }
+
+    private record DumpLocalPoint(int x, int y, int sceneX, int sceneY)
+    {
+    }
+
+    private record DumpPoint(int x, int y, int plane)
+    {
+    }
+
+    private record DumpAabb(int centerX, int centerY, int centerZ, int extremeX, int extremeY, int extremeZ)
+    {
+    }
+
+    private record DumpModelBounds(
+        int minX,
+        int maxX,
+        double centerX,
+        int minY,
+        int maxY,
+        int minZ,
+        int maxZ,
+        double centerZ,
+        int vertexCount
+    )
+    {
+    }
+
+    private record DumpTile(int x, int y, int height, boolean hasBridge, Integer bridgeHeight, Integer renderLevel)
+    {
     }
 
     private boolean sendPendingObjectModels(List<ObjectModelDefinitionPayload> modelDefinitions)
@@ -379,12 +725,46 @@ public class RuneXrPlugin extends Plugin
         return batches;
     }
 
+    static List<List<ActorModelDefinitionPayload>> partitionActorModelDefinitions(Gson gson, List<ActorModelDefinitionPayload> definitions)
+    {
+        List<List<ActorModelDefinitionPayload>> batches = new ArrayList<>();
+        List<ActorModelDefinitionPayload> currentBatch = new ArrayList<>();
+        int currentChars = 0;
+
+        for (ActorModelDefinitionPayload definition : definitions)
+        {
+            int estimatedChars = estimateActorModelDefinitionChars(gson, definition);
+
+            if (!currentBatch.isEmpty() && currentChars + estimatedChars > MAX_OBJECT_MODEL_BATCH_CHARS)
+            {
+                batches.add(List.copyOf(currentBatch));
+                currentBatch.clear();
+                currentChars = 0;
+            }
+
+            currentBatch.add(definition);
+            currentChars += estimatedChars;
+        }
+
+        if (!currentBatch.isEmpty())
+        {
+            batches.add(List.copyOf(currentBatch));
+        }
+
+        return batches;
+    }
+
     private static int estimateTextureDefinitionChars(TextureDefinitionPayload definition)
     {
         return definition.pngBase64().length() + 128;
     }
 
     private static int estimateObjectModelDefinitionChars(Gson gson, ObjectModelDefinitionPayload definition)
+    {
+        return gson.toJson(definition).length() + 64;
+    }
+
+    private static int estimateActorModelDefinitionChars(Gson gson, ActorModelDefinitionPayload definition)
     {
         return gson.toJson(definition).length() + 64;
     }
@@ -456,10 +836,46 @@ public class RuneXrPlugin extends Plugin
         return textureIds;
     }
 
-    static SnapshotTransportBundle splitObjectModels(SceneSnapshotPayload snapshot)
+    static SnapshotTransportBundle splitModels(SceneSnapshotPayload snapshot)
     {
-        LinkedHashMap<String, ObjectModelDefinitionPayload> modelDefinitions = new LinkedHashMap<>();
+        LinkedHashMap<String, ActorModelDefinitionPayload> actorModelDefinitions = new LinkedHashMap<>();
+        LinkedHashMap<String, ObjectModelDefinitionPayload> objectModelDefinitions = new LinkedHashMap<>();
+        List<ActorPayload> actors = new ArrayList<>(snapshot.actors().size());
         List<SceneObjectPayload> objects = new ArrayList<>(snapshot.objects().size());
+
+        for (ActorPayload actor : snapshot.actors())
+        {
+            TileSurfaceModelPayload model = actor.model();
+
+            if (model == null)
+            {
+                actors.add(actor);
+                continue;
+            }
+
+            String modelKey = actor.modelKey();
+
+            if (modelKey == null || modelKey.isBlank())
+            {
+                modelKey = modelKeyForModel(model, "actor-model");
+            }
+
+            actorModelDefinitions.putIfAbsent(modelKey, new ActorModelDefinitionPayload(modelKey, model));
+            actors.add(new ActorPayload(
+                actor.id(),
+                actor.type(),
+                actor.name(),
+                actor.x(),
+                actor.y(),
+                actor.plane(),
+                actor.preciseX(),
+                actor.preciseY(),
+                actor.rotationDegrees(),
+                actor.size(),
+                modelKey,
+                null
+            ));
+        }
 
         for (SceneObjectPayload object : snapshot.objects())
         {
@@ -478,7 +894,7 @@ public class RuneXrPlugin extends Plugin
                 modelKey = modelKeyForModel(model);
             }
 
-            modelDefinitions.putIfAbsent(modelKey, new ObjectModelDefinitionPayload(modelKey, model));
+            objectModelDefinitions.putIfAbsent(modelKey, new ObjectModelDefinitionPayload(modelKey, model));
             objects.add(new SceneObjectPayload(
                 object.id(),
                 object.kind(),
@@ -504,14 +920,20 @@ public class RuneXrPlugin extends Plugin
                 snapshot.baseY(),
                 snapshot.plane(),
                 snapshot.tiles(),
-                snapshot.actors(),
+                List.copyOf(actors),
                 List.copyOf(objects)
             ),
-            List.copyOf(modelDefinitions.values())
+            List.copyOf(actorModelDefinitions.values()),
+            List.copyOf(objectModelDefinitions.values())
         );
     }
 
     static String modelKeyForModel(TileSurfaceModelPayload model)
+    {
+        return modelKeyForModel(model, "object-model");
+    }
+
+    static String modelKeyForModel(TileSurfaceModelPayload model, String prefix)
     {
         try
         {
@@ -544,7 +966,7 @@ public class RuneXrPlugin extends Plugin
                 updateDigest(digest, face.vC());
             }
 
-            return "object-model:" + toHex(digest.digest());
+            return prefix + ":" + toHex(digest.digest());
         }
         catch (NoSuchAlgorithmException exception)
         {
@@ -609,6 +1031,7 @@ public class RuneXrPlugin extends Plugin
     private void clearSentState()
     {
         lastSnapshotState = null;
+        sentActorModelKeys.clear();
         sentObjectModelKeys.clear();
         sentTextureIds.clear();
     }
@@ -621,7 +1044,8 @@ public class RuneXrPlugin extends Plugin
 
     record SnapshotTransportBundle(
         SceneSnapshotPayload snapshot,
-        List<ObjectModelDefinitionPayload> modelDefinitions
+        List<ActorModelDefinitionPayload> actorModelDefinitions,
+        List<ObjectModelDefinitionPayload> objectModelDefinitions
     )
     {
     }

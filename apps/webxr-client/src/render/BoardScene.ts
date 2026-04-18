@@ -14,9 +14,17 @@ import {
   SphereGeometry,
   type Matrix4,
 } from 'three';
-import type {ObjectModelDefinition, SceneObject, SceneSnapshot, TextureDefinition} from '@rune-xr/protocol';
+import type {
+  Actor,
+  ActorModelDefinition,
+  ObjectModelDefinition,
+  SceneObject,
+  SceneSnapshot,
+  TextureDefinition,
+} from '@rune-xr/protocol';
 import {ACTOR_HEIGHT, HEIGHT_SCALE, OBJECT_HEIGHT, TILE_WORLD_SIZE} from '../config.js';
 import type {InterpolatedActor} from '../world/WorldStateStore.js';
+import {createActorMesh} from './ActorMeshBuilder.js';
 import {createObjectMeshesFromData} from './ObjectMeshBuilder.js';
 import type {ObjectMeshBuildData, SceneMeshSnapshot, TerrainMeshBuildData} from './MeshBuildData.js';
 import {createSceneMeshBuildRunner} from './SceneMeshBuildRunner.js';
@@ -164,7 +172,8 @@ export class BoardScene {
     ground: new MeshStandardMaterial({color: new Color('#86664f'), roughness: 0.95}),
   };
 
-  private readonly actorNodes = new Map<string, Mesh>();
+  private readonly actorModelStore = new Map<string, NonNullable<Actor['model']>>();
+  private readonly actorNodes = new Map<string, Object3D>();
   private readonly buildStats: BuildStats = {
     terrain: createBuildPhaseStats(),
     objects: createBuildPhaseStats(),
@@ -209,30 +218,35 @@ export class BoardScene {
 
   updateActors(actors: InterpolatedActor[]) {
     for (const actor of actors) {
-      let mesh = this.actorNodes.get(actor.id);
+      const actorModel = this.resolveActorModel(actor);
+      const appearanceKey = this.actorAppearanceKey(actor, actorModel);
+      let node = this.actorNodes.get(actor.id);
 
-      if (!mesh) {
-        mesh = new Mesh(this.actorGeometry, this.actorMaterials[actor.type]);
-        mesh.castShadow = true;
-        this.actorNodes.set(actor.id, mesh);
-        this.actorGroup.add(mesh);
+      if (!node || node.userData.actorAppearanceKey !== appearanceKey) {
+        if (node) {
+          disposeObject(node);
+        }
+
+        node = this.createActorNode(actor, actorModel, appearanceKey);
+        this.actorNodes.set(actor.id, node);
+        this.actorGroup.add(node);
       }
 
-      mesh.material = this.actorMaterials[actor.type];
-      mesh.position.set(
-        this.tileCenterX(actor.renderX),
-        this.tileHeightWorld(actor.renderX, actor.renderY) + ACTOR_HEIGHT / 2 + 0.008,
-        this.tileCenterZ(actor.renderY),
+      node.position.set(
+        this.exactWorldX(actor.renderX),
+        this.tileHeightWorld(actor.renderX, actor.renderY) + 0.008,
+        this.exactWorldZ(actor.renderY),
       );
+      node.rotation.set(0, MathUtils.degToRad(-(actor.rotationDegrees ?? 0)), 0);
     }
 
-    for (const [id, mesh] of this.actorNodes) {
+    for (const [id, node] of this.actorNodes) {
       if (actors.some(actor => actor.id === id)) {
         continue;
       }
 
       this.actorNodes.delete(id);
-      this.actorGroup.remove(mesh);
+      disposeObject(node);
     }
   }
 
@@ -245,6 +259,12 @@ export class BoardScene {
 
     if (this.snapshot && updatedObjectTextureIds.length > 0) {
       this.rebuildObjects(this.snapshot.objects);
+    }
+  }
+
+  applyActorModelBatch(models: ActorModelDefinition[]) {
+    for (const definition of models) {
+      this.actorModelStore.set(definition.key, definition.model);
     }
   }
 
@@ -472,6 +492,62 @@ export class BoardScene {
     }
 
     return this.objectModelStore.get(object.modelKey);
+  }
+
+  private resolveActorModel(actor: Pick<InterpolatedActor, 'model' | 'modelKey'>) {
+    if (actor.model) {
+      return actor.model;
+    }
+
+    if (!actor.modelKey) {
+      return undefined;
+    }
+
+    return this.actorModelStore.get(actor.modelKey);
+  }
+
+  private createActorNode(
+    actor: Pick<InterpolatedActor, 'id' | 'type'>,
+    model: NonNullable<Actor['model']> | undefined,
+    appearanceKey: string,
+  ) {
+    const root = new Group();
+
+    root.name = `actor:${actor.id}`;
+    root.userData.actorAppearanceKey = appearanceKey;
+
+    if (model) {
+      root.add(createActorMesh(actor, model));
+      return root;
+    }
+
+    const mesh = new Mesh(this.actorGeometry, this.actorMaterials[actor.type]);
+
+    mesh.castShadow = true;
+    mesh.position.y = ACTOR_HEIGHT / 2;
+    mesh.userData.disposeGeometry = false;
+    mesh.userData.disposeMaterial = false;
+    root.add(mesh);
+    return root;
+  }
+
+  private actorAppearanceKey(
+    actor: Pick<InterpolatedActor, 'type' | 'model' | 'modelKey'>,
+    model: NonNullable<Actor['model']> | undefined,
+  ) {
+    if (actor.modelKey && model) {
+      return `model-key:${actor.modelKey}`;
+    }
+
+    if (actor.modelKey) {
+      return `pending-model-key:${actor.modelKey}`;
+    }
+
+    if (actor.model) {
+      return `inline-model:${hashInlineModel(actor.model)}`;
+    }
+
+    return `placeholder:${actor.type}`;
   }
 
   private collectWallData(objects: SceneObject[]) {
@@ -929,7 +1005,15 @@ export class BoardScene {
   }
 
   private tileCenterZ(worldY: number) {
-    return (this.maxY - worldY + 0.5) * TILE_WORLD_SIZE;
+    return (this.maxY - worldY - 0.5) * TILE_WORLD_SIZE;
+  }
+
+  private exactWorldX(worldX: number) {
+    return (worldX - this.snapshot!.baseX) * TILE_WORLD_SIZE;
+  }
+
+  private exactWorldZ(worldY: number) {
+    return (this.maxY - worldY) * TILE_WORLD_SIZE;
   }
 
   private edgeX(worldXLine: number) {
@@ -937,7 +1021,7 @@ export class BoardScene {
   }
 
   private edgeZ(worldYLine: number) {
-    return (this.maxY - worldYLine + 1) * TILE_WORLD_SIZE;
+    return (this.maxY - worldYLine) * TILE_WORLD_SIZE;
   }
 
   private tileHeightWorld(worldX: number, worldY: number) {
@@ -977,8 +1061,8 @@ export class BoardScene {
   }
 
   private heightAt(worldX: number, worldY: number) {
-    const roundedX = Math.round(worldX);
-    const roundedY = Math.round(worldY);
+    const roundedX = Math.floor(worldX);
+    const roundedY = Math.floor(worldY);
 
     return this.heightMap.get(`${roundedX}:${roundedY}`) ?? 0;
   }
@@ -1187,6 +1271,32 @@ function hashString(value: string) {
   }
 
   return hash;
+}
+
+function hashInlineModel(model: NonNullable<Actor['model']>) {
+  let hash = 17;
+
+  hash = Math.imul(hash, 31) + model.vertices.length;
+  hash = Math.imul(hash, 31) + model.faces.length;
+
+  for (const vertex of model.vertices) {
+    hash = Math.imul(hash, 31) + vertex.x;
+    hash = Math.imul(hash, 31) + vertex.y;
+    hash = Math.imul(hash, 31) + vertex.z;
+  }
+
+  for (const face of model.faces) {
+    hash = Math.imul(hash, 31) + face.a;
+    hash = Math.imul(hash, 31) + face.b;
+    hash = Math.imul(hash, 31) + face.c;
+    hash = Math.imul(hash, 31) + (face.rgb ?? -1);
+    hash = Math.imul(hash, 31) + (face.rgbA ?? -1);
+    hash = Math.imul(hash, 31) + (face.rgbB ?? -1);
+    hash = Math.imul(hash, 31) + (face.rgbC ?? -1);
+    hash = Math.imul(hash, 31) + (face.texture ?? -1);
+  }
+
+  return `${hash}`;
 }
 
 function toSceneMeshSnapshot(snapshot: SceneSnapshot): SceneMeshSnapshot {

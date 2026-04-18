@@ -12,6 +12,7 @@ import {
 } from 'three';
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js';
 import {
+  type ActorModelDefinition,
   type ObjectModelDefinition,
   type SceneObject,
   type SceneSnapshot,
@@ -146,6 +147,7 @@ const wallTextureStatusElement = wallTextureStatus;
 const objectTexturePreviewsElement = objectTexturePreviews;
 const fpsTracker = createFpsTracker();
 const texturePreviewUrls = new Map<number, string>();
+const actorModelStore = new Map<string, ActorModelDefinition['model']>();
 const objectModelStore = new Map<string, ObjectModelDefinition['model']>();
 
 let currentTexturePreviewDescriptors: Array<{id: number; label: string}> = [];
@@ -196,6 +198,11 @@ scene.add(boardScene.root, xrPlacementController.reticle);
 applySnapshot(sampleSceneSnapshot, 'Loaded sample fixture');
 
 const bridgeClient = new BridgeSocketClient({
+  onActorModelBatch(models) {
+    cacheActorModels(models);
+    boardScene.applyActorModelBatch(models);
+    boardScene.updateActors(worldState.getInterpolatedActors());
+  },
   onObjectModelBatch(models) {
     cacheObjectModels(models);
     boardScene.applyObjectModelBatch(models);
@@ -627,6 +634,12 @@ function summarizeObjectTextures(snapshot: SceneSnapshot, models: Map<string, Ob
 function cacheTexturePreviews(textures: TextureDefinition[]) {
   for (const texture of textures) {
     texturePreviewUrls.set(texture.id, `data:image/png;base64,${texture.pngBase64}`);
+  }
+}
+
+function cacheActorModels(models: ActorModelDefinition[]) {
+  for (const model of models) {
+    actorModelStore.set(model.key, model.model);
   }
 }
 

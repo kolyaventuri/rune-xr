@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import dev.rune.xr.runelite.model.ActorModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ActorPayload;
 import dev.rune.xr.runelite.model.ObjectModelDefinitionPayload;
 import dev.rune.xr.runelite.model.SceneObjectPayload;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
@@ -133,15 +135,54 @@ class RuneXrPluginTextureCollectionTest
             )
         );
 
-        var transportBundle = RuneXrPlugin.splitObjectModels(snapshot);
+        var transportBundle = RuneXrPlugin.splitModels(snapshot);
 
-        assertEquals(1, transportBundle.modelDefinitions().size());
-        ObjectModelDefinitionPayload definition = transportBundle.modelDefinitions().get(0);
+        assertEquals(1, transportBundle.objectModelDefinitions().size());
+        ObjectModelDefinitionPayload definition = transportBundle.objectModelDefinitions().get(0);
         assertNotNull(definition.key());
         assertEquals(sharedModel, definition.model());
         assertEquals(definition.key(), transportBundle.snapshot().objects().get(0).modelKey());
         assertEquals(definition.key(), transportBundle.snapshot().objects().get(1).modelKey());
         assertNull(transportBundle.snapshot().objects().get(0).model());
         assertNull(transportBundle.snapshot().objects().get(1).model());
+    }
+
+    @Test
+    void splitsActorModelsIntoReusableDefinitions()
+    {
+        TileSurfaceModelPayload sharedModel = new TileSurfaceModelPayload(
+            List.of(
+                new TileSurfaceVertexPayload(-16, 0, -8),
+                new TileSurfaceVertexPayload(16, 0, -8),
+                new TileSurfaceVertexPayload(0, 64, 12)
+            ),
+            List.of(
+                new TileSurfaceFacePayload(0, 1, 2, 0x4478c8, null, null, null, null, null, null, null, null, null, null)
+            )
+        );
+        SceneSnapshotPayload snapshot = new SceneSnapshotPayload(
+            1,
+            100L,
+            3200,
+            3200,
+            0,
+            List.of(new TilePayload(3200, 3200, 0, 0, null)),
+            List.of(
+                new ActorPayload("self", "self", "Kolya", 3200, 3200, 0, 3200.5, 3200.5, 180, 1, null, sharedModel),
+                new ActorPayload("friend", "player", "Friend", 3201, 3200, 0, 3201.5, 3200.5, 90, 1, null, sharedModel)
+            ),
+            List.of()
+        );
+
+        var transportBundle = RuneXrPlugin.splitModels(snapshot);
+
+        assertEquals(1, transportBundle.actorModelDefinitions().size());
+        ActorModelDefinitionPayload definition = transportBundle.actorModelDefinitions().get(0);
+        assertNotNull(definition.key());
+        assertEquals(sharedModel, definition.model());
+        assertEquals(definition.key(), transportBundle.snapshot().actors().get(0).modelKey());
+        assertEquals(definition.key(), transportBundle.snapshot().actors().get(1).modelKey());
+        assertNull(transportBundle.snapshot().actors().get(0).model());
+        assertNull(transportBundle.snapshot().actors().get(1).model());
     }
 }

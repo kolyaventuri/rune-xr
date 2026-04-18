@@ -3,6 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
 import {
+	createActorModelBatchMessage,
 	createHelloMessage,
 	createObjectModelBatchMessage,
 	createTextureBatchMessage,
@@ -62,6 +63,26 @@ describe('protocol fixtures', () => {
 		]);
 
 		expect(parseProtocolMessage(structuredClone(objectModelBatch))).toEqual(objectModelBatch);
+	});
+
+	it('parses actor model batch envelopes', () => {
+		const actorModelBatch = createActorModelBatchMessage([
+			{
+				key: 'actor-model:test',
+				model: {
+					vertices: [
+						{x: -16, y: 0, z: -16},
+						{x: 16, y: 0, z: -16},
+						{x: 0, y: 48, z: 16},
+					],
+					faces: [
+						{a: 0, b: 1, c: 2, rgb: 0x778899},
+					],
+				},
+			},
+		]);
+
+		expect(parseProtocolMessage(structuredClone(actorModelBatch))).toEqual(actorModelBatch);
 	});
 
 	it('rejects malformed scene snapshots', () => {
@@ -162,5 +183,46 @@ describe('protocol fixtures', () => {
 		expect(parsed.objects[1]?.model?.faces[0]?.texture).toBe(7);
 		expect(parsed.objects[1]?.model?.faces[0]?.rgbB).toBe(0x00aa00);
 		expect(parsed.objects[1]?.model?.faces[0]?.uB).toBe(1);
+	});
+
+	it('accepts optional actor model metadata', () => {
+		const parsed = parseSceneSnapshot({
+			...sampleSceneSnapshot,
+			actors: [
+				{
+					...sampleSceneSnapshot.actors[0],
+					preciseX: sampleSceneSnapshot.actors[0]!.x + 0.75,
+					preciseY: sampleSceneSnapshot.actors[0]!.y + 0.25,
+					rotationDegrees: 270,
+					size: 2,
+					modelKey: 'actor-model:self',
+					model: {
+						vertices: [
+							{x: -16, y: 0, z: -8},
+							{x: 16, y: 0, z: -8},
+							{x: 0, y: 64, z: 12},
+						],
+						faces: [
+							{
+								a: 0,
+								b: 1,
+								c: 2,
+								rgbA: 0xaa0000,
+								rgbB: 0x00aa00,
+								rgbC: 0x0000aa,
+							},
+						],
+					},
+				},
+				...sampleSceneSnapshot.actors.slice(1),
+			],
+		});
+
+		expect(parsed.actors[0]?.preciseX).toBe(sampleSceneSnapshot.actors[0]!.x + 0.75);
+		expect(parsed.actors[0]?.preciseY).toBe(sampleSceneSnapshot.actors[0]!.y + 0.25);
+		expect(parsed.actors[0]?.rotationDegrees).toBe(270);
+		expect(parsed.actors[0]?.size).toBe(2);
+		expect(parsed.actors[0]?.modelKey).toBe('actor-model:self');
+		expect(parsed.actors[0]?.model?.faces[0]?.rgbB).toBe(0x00aa00);
 	});
 });

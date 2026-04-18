@@ -65,23 +65,39 @@ export class WorldStateStore {
     );
 
     return this.currentSnapshot.actors.map(actor => {
+      if (actor.type === 'self') {
+        return {
+          ...actor,
+          renderX: actorExactX(actor),
+          renderY: actorExactY(actor),
+        };
+      }
+
       const previous = previousActors.get(actor.id);
 
       if (!previous) {
         return {
           ...actor,
-          renderX: actor.x,
-          renderY: actor.y,
+          renderX: actorExactX(actor),
+          renderY: actorExactY(actor),
         };
       }
 
       return {
         ...actor,
-        renderX: lerp(previous.x, actor.x, alpha),
-        renderY: lerp(previous.y, actor.y, alpha),
+        renderX: lerp(actorExactX(previous), actorExactX(actor), alpha),
+        renderY: lerp(actorExactY(previous), actorExactY(actor), alpha),
       };
     });
   }
+}
+
+function actorExactX(actor: Pick<Actor, 'x' | 'preciseX'>) {
+  return actor.preciseX ?? actor.x + 0.5;
+}
+
+function actorExactY(actor: Pick<Actor, 'y' | 'preciseY'>) {
+  return actor.preciseY ?? actor.y + 0.5;
 }
 
 const HASH_SEED = 0x811c9dc5;
@@ -138,7 +154,13 @@ function makeActorSignature(snapshot: SceneSnapshot) {
     hash = hashString(hash, actor.name ?? '');
     hash = hashNumber(hash, actor.x);
     hash = hashNumber(hash, actor.y);
+    hash = hashOptionalFloat(hash, actor.preciseX);
+    hash = hashOptionalFloat(hash, actor.preciseY);
     hash = hashNumber(hash, actor.plane);
+    hash = hashOptionalNumber(hash, actor.rotationDegrees);
+    hash = hashOptionalNumber(hash, actor.size);
+    hash = hashString(hash, actor.modelKey ?? '');
+    hash = hashModel(hash, actor.model);
   }
 
   return finalizeHash(hash);

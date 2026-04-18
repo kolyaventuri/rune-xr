@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {
+	actorModelDefinitionSchema,
 	clientRoleSchema,
 	objectModelDefinitionSchema,
 	protocolVersion,
@@ -29,6 +30,11 @@ export const objectModelBatchMessageSchema = z.object({
 	models: z.array(objectModelDefinitionSchema),
 });
 
+export const actorModelBatchMessageSchema = z.object({
+	kind: z.literal('actor_model_batch'),
+	models: z.array(actorModelDefinitionSchema),
+});
+
 export const pingMessageSchema = z.object({
 	kind: z.literal('ping'),
 	sentAt: z.number().int().nonnegative(),
@@ -36,7 +42,7 @@ export const pingMessageSchema = z.object({
 
 export const ackMessageSchema = z.object({
 	kind: z.literal('ack'),
-	ackedKind: z.enum(['hello', 'scene_snapshot', 'texture_batch', 'object_model_batch', 'ping']),
+	ackedKind: z.enum(['hello', 'scene_snapshot', 'texture_batch', 'object_model_batch', 'actor_model_batch', 'ping']),
 	serverTime: z.number().int().nonnegative(),
 	detail: z.string().min(1).optional(),
 });
@@ -52,6 +58,7 @@ export const protocolMessageSchema = z.discriminatedUnion('kind', [
 	sceneSnapshotMessageSchema,
 	textureBatchMessageSchema,
 	objectModelBatchMessageSchema,
+	actorModelBatchMessageSchema,
 	pingMessageSchema,
 	ackMessageSchema,
 	errorMessageSchema,
@@ -61,6 +68,7 @@ export type HelloMessage = z.infer<typeof helloMessageSchema>;
 export type SceneSnapshotMessage = z.infer<typeof sceneSnapshotMessageSchema>;
 export type TextureBatchMessage = z.infer<typeof textureBatchMessageSchema>;
 export type ObjectModelBatchMessage = z.infer<typeof objectModelBatchMessageSchema>;
+export type ActorModelBatchMessage = z.infer<typeof actorModelBatchMessageSchema>;
 export type PingMessage = z.infer<typeof pingMessageSchema>;
 export type AckMessage = z.infer<typeof ackMessageSchema>;
 export type ErrorMessage = z.infer<typeof errorMessageSchema>;
@@ -100,6 +108,13 @@ export function createTextureBatchMessage(textures: TextureBatchMessage['texture
 export function createObjectModelBatchMessage(models: ObjectModelBatchMessage['models']): ObjectModelBatchMessage {
 	return {
 		kind: 'object_model_batch',
+		models,
+	};
+}
+
+export function createActorModelBatchMessage(models: ActorModelBatchMessage['models']): ActorModelBatchMessage {
+	return {
+		kind: 'actor_model_batch',
 		models,
 	};
 }

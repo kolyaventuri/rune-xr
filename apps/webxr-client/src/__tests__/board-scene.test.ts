@@ -1,8 +1,9 @@
-import {Mesh} from 'three';
+import {Mesh, Vector3} from 'three';
 import {describe, expect, it} from 'vitest';
 import type {Object3D} from 'three';
 import type {SceneSnapshot} from '@rune-xr/protocol';
 import {sampleSceneSnapshot} from '@rune-xr/protocol';
+import {TILE_WORLD_SIZE} from '../config.js';
 import {BoardScene} from '../render/BoardScene.js';
 
 describe('BoardScene', () => {
@@ -10,11 +11,7 @@ describe('BoardScene', () => {
     const board = new BoardScene();
 
     board.applySnapshot(sampleSceneSnapshot, {terrainChanged: true});
-    board.updateActors(sampleSceneSnapshot.actors.map(actor => ({
-      ...actor,
-      renderX: actor.x,
-      renderY: actor.y,
-    })));
+    board.updateActors(sampleSceneSnapshot.actors.map(toRenderedActor));
 
     expect(board.terrainBuildCount).toBe(1);
     expect(board.getDebugState()).toEqual({
@@ -97,8 +94,8 @@ describe('BoardScene', () => {
         x: 3200,
         y: 3200,
         plane: 0,
-        renderX: 3200,
-        renderY: 3200,
+        renderX: 3200.5,
+        renderY: 3200.5,
       },
       {
         id: 'north',
@@ -106,8 +103,8 @@ describe('BoardScene', () => {
         x: 3200,
         y: 3201,
         plane: 0,
-        renderX: 3200,
-        renderY: 3201,
+        renderX: 3200.5,
+        renderY: 3201.5,
       },
     ]);
 
@@ -116,6 +113,8 @@ describe('BoardScene', () => {
 
     expect(south).toBeDefined();
     expect(north).toBeDefined();
+    expect(south!.position.z).toBeCloseTo(TILE_WORLD_SIZE * 0.5, 5);
+    expect(north!.position.z).toBeCloseTo(-TILE_WORLD_SIZE * 0.5, 5);
     expect(north!.position.z).toBeLessThan(south!.position.z);
   });
 
@@ -187,6 +186,215 @@ describe('BoardScene', () => {
     expect((colorMesh as Mesh).geometry.getAttribute('position').count).toBe(3);
     expect(texturedMesh).toBeUndefined();
     expect(countNamedInstances(board.objectGroup.children, 'wall-segment')).toBe(0);
+  });
+
+  it('upgrades keyed actors from placeholders to model-backed meshes', () => {
+    const board = new BoardScene();
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+      ],
+      actors: [
+        {
+          id: 'self_demo',
+          type: 'self',
+          name: 'Kolya',
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          rotationDegrees: 180,
+          size: 1,
+          modelKey: 'actor-model:self-demo',
+        },
+      ],
+      objects: [],
+    };
+
+    board.applySnapshot(snapshot, {terrainChanged: true});
+    board.updateActors(snapshot.actors.map(toRenderedActor));
+
+    const placeholderRoot = board.actorGroup.children[0];
+    const placeholderMesh = placeholderRoot?.children[0];
+
+    expect(placeholderMesh).toBeInstanceOf(Mesh);
+    expect(placeholderMesh?.name).not.toBe('actor-model');
+
+    board.applyActorModelBatch([
+      {
+        key: 'actor-model:self-demo',
+        model: {
+          vertices: [
+            {x: 16, y: 240, z: 20},
+            {x: 48, y: 240, z: 20},
+            {x: 32, y: 304, z: 36},
+          ],
+          faces: [
+            {
+              a: 0,
+              b: 1,
+              c: 2,
+              rgb: 0x2c9f62,
+            },
+          ],
+        },
+      },
+    ]);
+    board.updateActors(snapshot.actors.map(toRenderedActor));
+
+    const actorRoot = board.actorGroup.children[0];
+    const actorMesh = actorRoot?.children[0] as Mesh | undefined;
+
+    actorMesh?.geometry.computeBoundingBox();
+
+    expect(actorMesh?.name).toBe('actor-model');
+    expect(actorMesh?.geometry.getAttribute('position').count).toBe(3);
+    expect(actorMesh?.geometry.boundingBox?.min.y).toBe(0);
+    expect(actorMesh?.geometry.boundingBox?.max.z ?? 0).toBeLessThan(0);
+  });
+
+  it('rotates actor models with RuneLite orientation parity', () => {
+    const board = new BoardScene();
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+      ],
+      actors: [
+        {
+          id: 'self_demo',
+          type: 'self',
+          name: 'Kolya',
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          rotationDegrees: 90,
+          modelKey: 'actor-model:self-demo',
+        },
+      ],
+      objects: [],
+    };
+
+    board.applySnapshot(snapshot, {terrainChanged: true});
+    board.applyActorModelBatch([
+      {
+        key: 'actor-model:self-demo',
+        model: {
+          vertices: [
+            {x: 0, y: 0, z: 0},
+            {x: 32, y: 0, z: 0},
+            {x: 0, y: 64, z: 64},
+          ],
+          faces: [
+            {
+              a: 0,
+              b: 1,
+              c: 2,
+              rgb: 0x2c9f62,
+            },
+          ],
+        },
+      },
+    ]);
+    board.updateActors(snapshot.actors.map(toRenderedActor));
+
+    const actorRoot = board.actorGroup.children[0];
+
+    expect(actorRoot?.rotation.y).toBeCloseTo(-Math.PI / 2, 5);
+  });
+
+  it('does not offset actor placement based on actor size metadata', () => {
+    const board = new BoardScene();
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    board.applySnapshot(snapshot, {terrainChanged: true});
+    board.updateActors([
+      {
+        id: 'sized',
+        type: 'player',
+        name: 'Sized',
+        x: 3200,
+        y: 3200,
+        plane: 0,
+        rotationDegrees: 0,
+        size: 5,
+        renderX: 3200.5,
+        renderY: 3200.5,
+      },
+    ]);
+
+    expect(board.actorGroup.children[0]?.position.x).toBeCloseTo(TILE_WORLD_SIZE / 2, 5);
+  });
+
+  it('places actors using precise in-tile coordinates', () => {
+    const board = new BoardScene();
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    board.applySnapshot(snapshot, {terrainChanged: true});
+    board.updateActors([
+      {
+        id: 'precise',
+        type: 'player',
+        x: 3200,
+        y: 3200,
+        plane: 0,
+        renderX: 3200.75,
+        renderY: 3200.25,
+      },
+    ]);
+
+    expect(board.actorGroup.children[0]?.position.x).toBeCloseTo(TILE_WORLD_SIZE * 0.75, 5);
+    expect(board.actorGroup.children[0]?.position.z).toBeCloseTo(TILE_WORLD_SIZE * 0.75, 5);
   });
 
   it('rebuilds proxy objects when referenced model batches arrive', () => {
@@ -316,4 +524,12 @@ function countNamedInstances(children: Object3D[], name: string) {
 
 function resolveInstanceCount(child: Object3D) {
   return typeof child.userData.instanceCount === 'number' ? child.userData.instanceCount : 1;
+}
+
+function toRenderedActor(actor: SceneSnapshot['actors'][number]) {
+  return {
+    ...actor,
+    renderX: actor.preciseX ?? actor.x + 0.5,
+    renderY: actor.preciseY ?? actor.y + 0.5,
+  };
 }

@@ -56,5 +56,24 @@ public interface RuneXrConfig extends Config
     {
         return true;
     }
-}
 
+    @ConfigItem(
+        keyName = "coordinateDumpEnabled",
+        name = "Coordinate dump",
+        description = "Write live self actor coordinate dumps to a JSONL file for debugging"
+    )
+    default boolean coordinateDumpEnabled()
+    {
+        return true;
+    }
+
+    @ConfigItem(
+        keyName = "coordinateDumpPath",
+        name = "Coordinate dump path",
+        description = "File path used for live coordinate dumps"
+    )
+    default String coordinateDumpPath()
+    {
+        return "/tmp/rune-xr-coordinate-dump.jsonl";
+    }
+}

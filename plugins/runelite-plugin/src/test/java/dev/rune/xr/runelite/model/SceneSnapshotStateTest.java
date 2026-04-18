@@ -18,7 +18,7 @@ class SceneSnapshotStateTest
             3200,
             0,
             List.of(new TilePayload(3200, 3200, 0, 0, null)),
-            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0)),
+            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0, 3200.5, 3200.5, 180, 1, null, null)),
             List.of()
         );
         SceneSnapshotPayload second = new SceneSnapshotPayload(
@@ -28,7 +28,7 @@ class SceneSnapshotStateTest
             3200,
             0,
             List.of(new TilePayload(3200, 3200, 0, 0, null)),
-            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0)),
+            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0, 3200.5, 3200.5, 180, 1, null, null)),
             List.of()
         );
 
@@ -45,7 +45,7 @@ class SceneSnapshotStateTest
             3200,
             0,
             List.of(new TilePayload(3200, 3200, 0, 0, null)),
-            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0)),
+            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0, 3200.5, 3200.5, 180, 1, null, null)),
             List.of()
         );
         SceneSnapshotPayload second = new SceneSnapshotPayload(
@@ -55,7 +55,7 @@ class SceneSnapshotStateTest
             3200,
             0,
             List.of(new TilePayload(3200, 3200, 0, 0, null)),
-            List.of(new ActorPayload("self", "self", "Kolya", 3201, 3200, 0)),
+            List.of(new ActorPayload("self", "self", "Kolya", 3201, 3200, 0, 3201.5, 3200.5, 180, 1, null, null)),
             List.of()
         );
 
