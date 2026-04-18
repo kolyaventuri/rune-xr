@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
+import net.runelite.api.DynamicObject;
 import net.runelite.api.Model;
 import net.runelite.api.Renderable;
 import net.runelite.api.SceneTileModel;
@@ -98,6 +99,52 @@ class SceneExtractorTest
         );
 
         assertSame(model, SceneExtractor.resolveRenderableModel(renderable));
+    }
+
+    @Test
+    void fallsBackToDynamicObjectModelWhenZbufModelIsMissing()
+    {
+        Model fallbackModel = modelWithGeometry();
+        DynamicObject dynamicObject = (DynamicObject) Proxy.newProxyInstance(
+            DynamicObject.class.getClassLoader(),
+            new Class<?>[] {DynamicObject.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getModelZbuf" -> null;
+                case "getModel" -> fallbackModel;
+                default -> null;
+            }
+        );
+
+        assertSame(fallbackModel, SceneExtractor.resolveRenderableModel(dynamicObject));
+    }
+
+    @Test
+    void fallsBackToDynamicObjectModelWhenZbufModelHasNoGeometry()
+    {
+        Model emptyModel = (Model) Proxy.newProxyInstance(
+            Model.class.getClassLoader(),
+            new Class<?>[] {Model.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getVerticesX", "getVerticesY", "getVerticesZ" -> new float[0];
+                case "getFaceIndices1", "getFaceIndices2", "getFaceIndices3" -> new int[0];
+                default -> null;
+            }
+        );
+        Model fallbackModel = modelWithGeometry();
+        DynamicObject dynamicObject = (DynamicObject) Proxy.newProxyInstance(
+            DynamicObject.class.getClassLoader(),
+            new Class<?>[] {DynamicObject.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getModelZbuf" -> emptyModel;
+                case "getModel" -> fallbackModel;
+                default -> null;
+            }
+        );
+
+        assertSame(fallbackModel, SceneExtractor.resolveRenderableModel(dynamicObject));
     }
 
     @Test
@@ -215,6 +262,22 @@ class SceneExtractorTest
             {
                 case "getRenderLevel", "getPlane" -> renderLevel;
                 case "getBridge" -> bridge;
+                default -> null;
+            }
+        );
+    }
+
+    private static Model modelWithGeometry()
+    {
+        return (Model) Proxy.newProxyInstance(
+            Model.class.getClassLoader(),
+            new Class<?>[] {Model.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getVerticesX", "getVerticesY", "getVerticesZ" -> new float[] {0F, 1F, 2F};
+                case "getFaceIndices1" -> new int[] {0};
+                case "getFaceIndices2" -> new int[] {1};
+                case "getFaceIndices3" -> new int[] {2};
                 default -> null;
             }
         );
