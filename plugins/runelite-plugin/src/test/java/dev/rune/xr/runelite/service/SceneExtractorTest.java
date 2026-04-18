@@ -234,6 +234,41 @@ class SceneExtractorTest
         assertEquals(0, payload.faces().get(0).texture());
     }
 
+    @Test
+    void normalizesSpecialSceneTileFaceColorSentinels()
+    {
+        SceneTileModel model = (SceneTileModel) Proxy.newProxyInstance(
+            SceneTileModel.class.getClassLoader(),
+            new Class<?>[] {SceneTileModel.class},
+            (proxy, method, args) -> switch (method.getName())
+            {
+                case "getVertexX" -> new int[] {640, 768, 640, 768};
+                case "getVertexY" -> new int[] {-80, -80, -80, -80};
+                case "getVertexZ" -> new int[] {768, 768, 896, 896};
+                case "getFaceX" -> new int[] {0, 1};
+                case "getFaceY" -> new int[] {1, 2};
+                case "getFaceZ" -> new int[] {2, 3};
+                case "getTriangleColorA" -> new int[] {959, 959};
+                case "getTriangleColorB" -> new int[] {959, 959};
+                case "getTriangleColorC" -> new int[] {-1, -2};
+                case "getTriangleTextureId" -> new int[] {-1, -1};
+                case "isFlat" -> false;
+                case "getShape", "getRotation", "getModelUnderlay", "getModelOverlay", "getBufferOffset",
+                    "getUvBufferOffset", "getBufferLen" -> 0;
+                default -> null;
+            }
+        );
+
+        TileSurfaceModelPayload payload = SceneExtractor.extractSurfaceModel(model, 5, 6);
+
+        assertNotNull(payload);
+        assertEquals(1, payload.faces().size());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbA());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbB());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgbC());
+        assertEquals(SceneExtractor.packedHslToRgb(959), payload.faces().get(0).rgb());
+    }
+
     private static Tile tileWithRenderLevel(int renderLevel)
     {
         return (Tile) Proxy.newProxyInstance(

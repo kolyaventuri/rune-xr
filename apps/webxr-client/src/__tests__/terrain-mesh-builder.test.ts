@@ -249,7 +249,56 @@ describe('TerrainMeshBuilder', () => {
     expect(colors.getZ(0)).toBeCloseTo(expected.b, 5);
   });
 
-  it('builds textured modeled tile faces with slot-relative UVs', () => {
+  it('uses modeled face vertex colors when present', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          height: 0,
+          surface: {
+            model: {
+              vertices: [
+                {x: 0, y: 0, z: 0},
+                {x: 128, y: 0, z: 0},
+                {x: 0, y: 0, z: 128},
+              ],
+              faces: [
+                {a: 0, b: 1, c: 2, rgbA: 0xff0000, rgbB: 0x00ff00, rgbC: 0x0000ff},
+              ],
+            },
+          },
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const geometry = buildTerrainGeometry(snapshot);
+    const colors = geometry.getAttribute('color');
+
+    expect(colors.count).toBe(3);
+    expect(colors.getX(0)).toBeCloseTo(new Color(0xff0000).r, 5);
+    expect(colors.getY(1)).toBeCloseTo(new Color(0x00ff00).g, 5);
+    expect(colors.getZ(2)).toBeCloseTo(new Color(0x0000ff).b, 5);
+  });
+
+  it('does not build textured overlays for modeled terrain faces', () => {
     const snapshot: SceneSnapshot = {
       version: 1,
       timestamp: 1,
@@ -290,13 +339,56 @@ describe('TerrainMeshBuilder', () => {
     };
 
     const geometry = buildTexturedTerrainGeometry(snapshot);
-    const uvs = geometry.getAttribute('uv');
+    const positions = geometry.getAttribute('position');
 
-    expect(uvs.count).toBe(3);
-    expect(uvs.getX(0)).toBeCloseTo(3 / 16, 5);
-    expect(uvs.getY(0)).toBeCloseTo(0, 5);
-    expect(uvs.getX(1)).toBeCloseTo(4 / 16, 5);
-    expect(uvs.getY(2)).toBeCloseTo(1 / 16, 5);
+    expect(positions).toBeUndefined();
+  });
+
+  it('does not inherit tile textures for untextured modeled terrain faces', () => {
+    const snapshot: SceneSnapshot = {
+      version: 1,
+      timestamp: 1,
+      baseX: 3200,
+      baseY: 3200,
+      plane: 0,
+      tiles: [
+        {
+          x: 3200,
+          y: 3200,
+          plane: 0,
+          height: 0,
+          surface: {
+            texture: 3,
+            model: {
+              vertices: [
+                {x: 0, y: 0, z: 0},
+                {x: 128, y: 0, z: 0},
+                {x: 0, y: 0, z: 128},
+              ],
+              faces: [
+                {a: 0, b: 1, c: 2, rgbA: 0x112233, rgbB: 0x445566, rgbC: 0x778899},
+              ],
+            },
+          },
+        },
+        {
+          x: 3201, y: 3200, plane: 0, height: 0,
+        },
+        {
+          x: 3200, y: 3201, plane: 0, height: 0,
+        },
+        {
+          x: 3201, y: 3201, plane: 0, height: 0,
+        },
+      ],
+      actors: [],
+      objects: [],
+    };
+
+    const geometry = buildTexturedTerrainGeometry(snapshot);
+    const positions = geometry.getAttribute('position');
+
+    expect(positions).toBeUndefined();
   });
 
   it('maps larger world Y values toward smaller board Z values', () => {

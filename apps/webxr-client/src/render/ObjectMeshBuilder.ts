@@ -106,7 +106,6 @@ export function createObjectMeshesFromData(
 
     const texturedMesh = new Mesh(texturedGeometry, new MeshBasicMaterial({
       map: texture,
-      vertexColors: true,
       side: DoubleSide,
       alphaTest: 0.01,
       polygonOffset: true,
@@ -163,9 +162,9 @@ function appendObject(
 
     const texturedBuffers = getTextureBuffers(texturedBuffersByTexture, textureId)
 
-    appendTexturedVertex(snapshot, maxY, object, a, texturedBuffers, face, resolveFaceVertexColor(face, 'A', fallbackColor), 'A')
-    appendTexturedVertex(snapshot, maxY, object, b, texturedBuffers, face, resolveFaceVertexColor(face, 'B', fallbackColor), 'B')
-    appendTexturedVertex(snapshot, maxY, object, c, texturedBuffers, face, resolveFaceVertexColor(face, 'C', fallbackColor), 'C')
+    appendTexturedVertex(snapshot, maxY, object, a, texturedBuffers, face, 'A')
+    appendTexturedVertex(snapshot, maxY, object, b, texturedBuffers, face, 'B')
+    appendTexturedVertex(snapshot, maxY, object, c, texturedBuffers, face, 'C')
   }
 }
 
@@ -188,12 +187,10 @@ function appendTexturedVertex(
   vertex: ObjectVertex,
   buffers: GeometryBuffers,
   face: ObjectFace,
-  color: Color,
   suffix: 'A' | 'B' | 'C',
 ) {
   appendPosition(snapshot, maxY, object, vertex, buffers.positions)
   appendUv(face, buffers.uvs, suffix)
-  buffers.colors.push(color.r, color.g, color.b)
 }
 
 function appendPosition(
@@ -311,7 +308,6 @@ function buildTexturedGeometryData(buffers: GeometryBuffers) {
 
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(buffers.positions), 3))
   geometry.setAttribute('uv', new BufferAttribute(new Float32Array(buffers.uvs), 2))
-  geometry.setAttribute('color', new BufferAttribute(new Float32Array(buffers.colors), 3))
   geometry.computeVertexNormals()
 
   const data = extractGeometryBuildData(geometry)

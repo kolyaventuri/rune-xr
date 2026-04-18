@@ -177,6 +177,13 @@ final class SceneTileSurfaceExtractor
 
     private Integer resolveModelRgb(Integer texture, SceneTileModel model)
     {
+        Integer modelRgb = averageModelRgb(model);
+
+        if (modelRgb != null)
+        {
+            return modelRgb;
+        }
+
         if (texture != null)
         {
             Integer textureRgb = textureColorCache.computeIfAbsent(texture, this::resolveTextureRgb);
@@ -450,15 +457,30 @@ final class SceneTileSurfaceExtractor
                 continue;
             }
 
+            Integer colorA = valueAt(triangleColorA, index);
+            Integer colorB = valueAt(triangleColorB, index);
+            Integer colorC = valueAt(triangleColorC, index);
+
+            if (colorC != null && colorC == -2)
+            {
+                continue;
+            }
+
+            if (colorC != null && colorC == -1)
+            {
+                colorB = colorA;
+                colorC = colorA;
+            }
+
             Integer faceTexture = valueAt(triangleTextureId, index, SceneTileSurfaceExtractor::normalizeTexture);
-            Integer rgbA = packedFaceColorToRgb(valueAt(triangleColorA, index));
-            Integer rgbB = packedFaceColorToRgb(valueAt(triangleColorB, index));
-            Integer rgbC = packedFaceColorToRgb(valueAt(triangleColorC, index));
+            Integer rgbA = packedFaceColorToRgb(colorA);
+            Integer rgbB = packedFaceColorToRgb(colorB);
+            Integer rgbC = packedFaceColorToRgb(colorC);
             faces.add(new TileSurfaceFacePayload(
                 a,
                 b,
                 c,
-                faceTexture == null ? averagePackedFaceColor(triangleColorA, triangleColorB, triangleColorC, index) : null,
+                faceTexture == null ? averagePackedFaceColor(colorA, colorB, colorC) : null,
                 rgbA,
                 rgbB,
                 rgbC,

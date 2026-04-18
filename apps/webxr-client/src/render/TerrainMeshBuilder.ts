@@ -26,6 +26,7 @@ type TileSurfaceVertex = TileSurfaceModel['vertices'][number]
 type BoundaryEdge = {start: TileSurfaceVertex; end: TileSurfaceVertex; side: BoundarySide}
 type BoundaryProfile = {kind: 'grid'} | {kind: 'modeled'; edges: BoundaryEdge[]; side: BoundarySide}
 type BoundaryEdgeCache = Map<string, BoundaryEdge[]>
+type TriangleVertexColors = readonly [Color, Color, Color]
 type GeometryBuffers = {
   positions: number[];
   colors: number[];
@@ -35,6 +36,7 @@ type GeometryBuffers = {
 const TRIANGLE_EPSILON = 1e-6
 const EDGE_EPSILON = 1e-6
 const BRIDGE_DECK_COLOR = new Color('#6f675c')
+const WHITE_TRIANGLE_COLORS = uniformTriangleColors(new Color(0xffffff))
 
 export function buildTerrainMeshes(snapshot: SceneMeshSnapshot, terrainTextureAtlas: Texture) {
   const data = buildTerrainMeshData(snapshot)
@@ -309,8 +311,8 @@ function resolveTileTexture(tile: Tile) {
   return isTerrainTextureId(textureId) ? textureId : undefined
 }
 
-function resolveFaceTexture(face: TileSurfaceFace, tile: Tile) {
-  const textureId = face.texture ?? tile.surface?.texture
+function resolveFaceTexture(face: TileSurfaceFace) {
+  const textureId = face.texture
   return isTerrainTextureId(textureId) ? textureId : undefined
 }
 
@@ -320,7 +322,7 @@ function appendModeledTile(
   tile: Tile,
   tiles: TileMap,
   colorBuffers: GeometryBuffers,
-  texturedBuffers: GeometryBuffers,
+  _texturedBuffers: GeometryBuffers,
   minHeight: number,
   maxHeight: number,
   boundaryEdges: BoundaryEdgeCache,
@@ -340,7 +342,7 @@ function appendModeledTile(
       continue
     }
 
-    const faceColor = resolveFaceColor(face, tile, minHeight, maxHeight)
+    const faceColors = resolveFaceVertexColors(face, tile, minHeight, maxHeight)
 
     appendLocalTriangle(
       snapshot,
@@ -349,26 +351,11 @@ function appendModeledTile(
       a,
       b,
       c,
-      faceColor,
+      faceColors,
       colorBuffers,
       {preferUpward: true},
     )
 
-    const textureId = resolveFaceTexture(face, tile)
-
-    if (textureId !== undefined) {
-      appendTexturedTriangle(
-        snapshot,
-        maxY,
-        tile,
-        a,
-        b,
-        c,
-        textureId,
-        texturedBuffers,
-        {preferUpward: true},
-      )
-    }
   }
 
   appendModeledTileStitches(
@@ -377,7 +364,7 @@ function appendModeledTile(
     tile,
     tiles,
     colorBuffers,
-    texturedBuffers,
+    _texturedBuffers,
     minHeight,
     maxHeight,
     boundaryEdges,
@@ -414,12 +401,12 @@ function appendModelUv(vertex: TileSurfaceVertex, textureId: number, uvs: number
   )
 }
 
-function resolveFaceColor(face: TileSurfaceFace, tile: Tile, minHeight: number, maxHeight: number) {
-  if (face.rgb !== undefined) {
-    return new Color(face.rgb)
-  }
-
-  return resolveTileColor(tile, minHeight, maxHeight)
+function resolveFaceVertexColors(face: TileSurfaceFace, tile: Tile, minHeight: number, maxHeight: number): TriangleVertexColors {
+  return [
+    resolveFaceVertexColor(face, tile, minHeight, maxHeight, 'A'),
+    resolveFaceVertexColor(face, tile, minHeight, maxHeight, 'B'),
+    resolveFaceVertexColor(face, tile, minHeight, maxHeight, 'C'),
+  ]
 }
 
 function appendBridgeTile(
@@ -478,8 +465,6 @@ function appendModeledTileStitches(
     return
   }
 
-  const seamTextureId = resolveTileTexture(tile)
-
   for (const edge of boundaryEdgesForTile(tile, boundaryEdges)) {
     const profile = resolveBoundaryProfile(tile, edge.side, tiles, boundaryEdges)
 
@@ -518,19 +503,6 @@ function appendModeledTileStitches(
         maxY,
       )
 
-      if (seamTextureId !== undefined) {
-        appendTexturedSeamQuad(
-          snapshot,
-          tile,
-          start,
-          end,
-          startTarget,
-          endTarget,
-          seamTextureId,
-          texturedBuffers,
-          maxY,
-        )
-      }
     }
   }
 }
@@ -858,23 +830,10 @@ function appendSeamQuad(
   colorBuffers: GeometryBuffers,
   maxY: number,
 ) {
-  appendLocalTriangle(snapshot, maxY, tile, start, end, startTarget, color, colorBuffers)
-  appendLocalTriangle(snapshot, maxY, tile, end, endTarget, startTarget, color, colorBuffers)
-}
+  const colors = uniformTriangleColors(color)
 
-function appendTexturedSeamQuad(
-  snapshot: SceneMeshSnapshot,
-  tile: Tile,
-  start: TileSurfaceVertex,
-  end: TileSurfaceVertex,
-  startTarget: TileSurfaceVertex,
-  endTarget: TileSurfaceVertex,
-  textureId: number,
-  texturedBuffers: GeometryBuffers,
-  maxY: number,
-) {
-  appendTexturedTriangle(snapshot, maxY, tile, start, end, startTarget, textureId, texturedBuffers)
-  appendTexturedTriangle(snapshot, maxY, tile, end, endTarget, startTarget, textureId, texturedBuffers)
+  appendLocalTriangle(snapshot, maxY, tile, start, end, startTarget, colors, colorBuffers)
+  appendLocalTriangle(snapshot, maxY, tile, end, endTarget, startTarget, colors, colorBuffers)
 }
 
 function appendLocalTriangle(
@@ -884,22 +843,25 @@ function appendLocalTriangle(
   a: TileSurfaceVertex,
   b: TileSurfaceVertex,
   c: TileSurfaceVertex,
-  color: Color,
+  colors: TriangleVertexColors,
   colorBuffers: GeometryBuffers,
   options?: {preferUpward?: boolean},
 ) {
-  const [first, second, third] = orientTriangle(a, b, c, options)
+  const {
+    vertices: [first, second, third],
+    colors: [firstColor, secondColor, thirdColor],
+  } = orientTriangle(a, b, c, colors, options)
 
   if (isDegenerateTriangle(first, second, third)) {
     return
   }
 
   appendModelVertex(snapshot, maxY, tile, first, colorBuffers.positions)
-  colorBuffers.colors.push(color.r, color.g, color.b)
+  colorBuffers.colors.push(firstColor.r, firstColor.g, firstColor.b)
   appendModelVertex(snapshot, maxY, tile, second, colorBuffers.positions)
-  colorBuffers.colors.push(color.r, color.g, color.b)
+  colorBuffers.colors.push(secondColor.r, secondColor.g, secondColor.b)
   appendModelVertex(snapshot, maxY, tile, third, colorBuffers.positions)
-  colorBuffers.colors.push(color.r, color.g, color.b)
+  colorBuffers.colors.push(thirdColor.r, thirdColor.g, thirdColor.b)
 }
 
 function appendTexturedTriangle(
@@ -913,7 +875,7 @@ function appendTexturedTriangle(
   texturedBuffers: GeometryBuffers,
   options?: {preferUpward?: boolean},
 ) {
-  const [first, second, third] = orientTriangle(a, b, c, options)
+  const {vertices: [first, second, third]} = orientTriangle(a, b, c, WHITE_TRIANGLE_COLORS, options)
 
   if (isDegenerateTriangle(first, second, third)) {
     return
@@ -931,13 +893,16 @@ function orientTriangle(
   a: TileSurfaceVertex,
   b: TileSurfaceVertex,
   c: TileSurfaceVertex,
+  colors: TriangleVertexColors,
   options?: {preferUpward?: boolean},
 ) {
   if (!options?.preferUpward) {
-    return [a, b, c] as const
+    return {vertices: [a, b, c] as const, colors}
   }
 
-  return triangleNormal(a, b, c).y < 0 ? [a, c, b] as const : [a, b, c] as const
+  return triangleNormal(a, b, c).y < 0
+    ? {vertices: [a, c, b] as const, colors: [colors[0], colors[2], colors[1]] as const}
+    : {vertices: [a, b, c] as const, colors}
 }
 
 function isDegenerateTriangle(a: TileSurfaceVertex, b: TileSurfaceVertex, c: TileSurfaceVertex) {
@@ -966,4 +931,39 @@ function tileKey(x: number, y: number) {
 
 function toBoardZ(maxY: number, worldY: number) {
   return (maxY - worldY) * TILE_WORLD_SIZE
+}
+
+function uniformTriangleColors(color: Color): TriangleVertexColors {
+  return [color, color, color]
+}
+
+function resolveFaceVertexColor(
+  face: TileSurfaceFace,
+  tile: Tile,
+  minHeight: number,
+  maxHeight: number,
+  suffix: 'A' | 'B' | 'C',
+) {
+  const rgb = switchFaceVertexRgb(face, suffix)
+
+  if (rgb !== undefined) {
+    return new Color(rgb)
+  }
+
+  if (face.rgb !== undefined) {
+    return new Color(face.rgb)
+  }
+
+  return resolveTileColor(tile, minHeight, maxHeight)
+}
+
+function switchFaceVertexRgb(face: TileSurfaceFace, suffix: 'A' | 'B' | 'C') {
+  switch (suffix) {
+    case 'A':
+      return face.rgbA
+    case 'B':
+      return face.rgbB
+    case 'C':
+      return face.rgbC
+  }
 }
