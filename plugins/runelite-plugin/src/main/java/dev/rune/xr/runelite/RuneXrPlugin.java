@@ -16,7 +16,6 @@ import dev.rune.xr.runelite.model.TextureDefinitionPayload;
 import dev.rune.xr.runelite.model.TileSurfaceModelPayload;
 import dev.rune.xr.runelite.service.BridgeClientService;
 import dev.rune.xr.runelite.service.SceneExtractor;
-import dev.rune.xr.runelite.service.SyntheticSceneFactory;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -80,7 +79,6 @@ public class RuneXrPlugin extends Plugin
     private ScheduledExecutorService executor;
     private BridgeClientService bridgeClient;
     private SceneExtractor sceneExtractor;
-    private SyntheticSceneFactory syntheticSceneFactory;
     private SceneSnapshotState lastSnapshotState;
     private final Set<String> sentActorModelKeys = new LinkedHashSet<>();
     private final Set<String> sentObjectModelKeys = new LinkedHashSet<>();
@@ -92,7 +90,6 @@ public class RuneXrPlugin extends Plugin
     {
         bridgeClient = new BridgeClientService(gson);
         sceneExtractor = new SceneExtractor(client);
-        syntheticSceneFactory = new SyntheticSceneFactory();
         initializeCoordinateDump();
         clearSentState();
         startSnapshotLoop();
@@ -170,9 +167,7 @@ public class RuneXrPlugin extends Plugin
     {
         try
         {
-            Optional<SceneSnapshotPayload> snapshot = config.syntheticMode()
-                ? Optional.of(syntheticSceneFactory.nextSnapshot(config.tileRadius()))
-                : sceneExtractor.extract(config.tileRadius());
+            Optional<SceneSnapshotPayload> snapshot = sceneExtractor.extract(config.tileRadius());
 
             snapshot.ifPresent(this::sendIfChanged);
         }
@@ -614,11 +609,6 @@ public class RuneXrPlugin extends Plugin
 
     private void sendPendingTextures(SceneSnapshotPayload snapshot, List<ObjectModelDefinitionPayload> objectModels)
     {
-        if (config.syntheticMode())
-        {
-            return;
-        }
-
         LinkedHashSet<Integer> pendingTextureIds = collectTextureIds(snapshot, objectModels);
         pendingTextureIds.removeAll(sentTextureIds);
 

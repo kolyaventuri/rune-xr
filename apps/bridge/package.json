@@ -12,7 +12,6 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "sample": "tsx src/sampleSender.ts",
     "test": "vitest run"
   },
   "dependencies": {

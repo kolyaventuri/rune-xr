@@ -3,7 +3,6 @@ package dev.rune.xr.runelite.model;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.gson.Gson;
-import dev.rune.xr.runelite.service.SyntheticSceneFactory;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -12,10 +11,18 @@ class PayloadSerializationTest
     private final Gson gson = new Gson();
 
     @Test
-    void serializesSyntheticSnapshot()
+    void serializesSceneSnapshot()
     {
-        SyntheticSceneFactory factory = new SyntheticSceneFactory();
-        SceneSnapshotPayload snapshot = factory.nextSnapshot(4);
+        SceneSnapshotPayload snapshot = new SceneSnapshotPayload(
+            ProtocolMessages.VERSION,
+            1L,
+            3200,
+            3200,
+            0,
+            List.of(new TilePayload(3200, 3200, 0, 0, null)),
+            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0, 3200.5, 3200.5, 180, 1, null, null)),
+            List.of(new SceneObjectPayload("tree", "game", "Tree", 3200, 3201, 0, 1, 1, null, null, null, null, null))
+        );
         String json = gson.toJson(ProtocolMessages.SceneSnapshotMessage.fromSnapshot(snapshot));
 
         assertTrue(json.contains("\"kind\":\"scene_snapshot\""));

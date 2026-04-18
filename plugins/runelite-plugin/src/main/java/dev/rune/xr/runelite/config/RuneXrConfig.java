@@ -48,16 +48,6 @@ public interface RuneXrConfig extends Config
     }
 
     @ConfigItem(
-        keyName = "syntheticMode",
-        name = "Synthetic mode",
-        description = "Send synthetic snapshots instead of sampling live RuneLite state"
-    )
-    default boolean syntheticMode()
-    {
-        return true;
-    }
-
-    @ConfigItem(
         keyName = "coordinateDumpEnabled",
         name = "Coordinate dump",
         description = "Write live self actor coordinate dumps to a JSONL file for debugging"

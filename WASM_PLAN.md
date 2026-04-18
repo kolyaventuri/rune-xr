@@ -1,22 +1,26 @@
 # WASM Evaluation for `webxr-client`
 
 ## Summary
-Local synthetic benchmarking says the best WASM candidates are the pure numeric mesh builders, not the XR/render loop or scene-state code.
+Synthetic scene benchmarking has been removed because it was not representative
+enough for Quest performance or render-capability decisions. Treat the current
+WASM ranking as a hypothesis only until it is backed by representative live
+RuneLite snapshots captured from the bridge.
 
-- `ObjectMeshBuilder` is the strongest candidate. In a local synthetic case of `150` modeled objects with `256` faces each, mesh generation took about `13.7 ms` per rebuild.
-- `TerrainMeshBuilder` is the next-best candidate. A `64x64` flat-cell terrain rebuild took about `3.35 ms`; a modeled `32x32` terrain took about `6.13 ms`.
-- `WorldStateStore` is already cheap. Applying a `64x64` terrain snapshot with `1000` actors took about `0.41 ms`; actor interpolation was about `0.07 ms`.
-- A proxy-heavy `BoardScene.applySnapshot()` case took about `12.5 ms`, but that path is mostly Three scene-graph work and mesh creation, so the right fix there is instancing/incremental updates, not WASM.
-
-These numbers are from desktop-local synthetic data, so use them for ranking, not absolute Quest budgets.
+- The most plausible WASM candidates are still the pure numeric mesh builders,
+  especially modeled object expansion and terrain mesh generation.
+- The XR loop, DOM/UI work, socket handling, and scene-graph ownership should
+  remain in TypeScript unless live profiling proves otherwise.
+- `BoardScene.applySnapshot()` is still more likely to benefit from
+  instancing/reuse and partial rebuilds than from WASM.
 
 ## Likely Biggest Lift
-1. Move modeled object mesh expansion in [ObjectMeshBuilder.ts](/Users/kolya/dev/rune-xr/apps/webxr-client/src/render/ObjectMeshBuilder.ts) to WASM first.
-2. Move terrain mesh expansion, especially modeled tiles and seam stitching, in [TerrainMeshBuilder.ts](/Users/kolya/dev/rune-xr/apps/webxr-client/src/render/TerrainMeshBuilder.ts) second.
-3. Keep [BoardScene.ts](/Users/kolya/dev/rune-xr/apps/webxr-client/src/render/BoardScene.ts) in JS and optimize it with `InstancedMesh`, geometry reuse, and partial rebuilds instead of WASM.
+1. Measure [ObjectMeshBuilder.ts](/Users/kolya/dev/rune-xr/apps/webxr-client/src/render/ObjectMeshBuilder.ts) against recorded live snapshots first.
+2. Measure [TerrainMeshBuilder.ts](/Users/kolya/dev/rune-xr/apps/webxr-client/src/render/TerrainMeshBuilder.ts), especially modeled tiles and seam stitching, second.
+3. Keep [BoardScene.ts](/Users/kolya/dev/rune-xr/apps/webxr-client/src/render/BoardScene.ts) in JS and optimize it with `InstancedMesh`, geometry reuse, and partial rebuilds before considering WASM.
 4. Do not spend WASM effort on state hashing/interpolation first.
 
-Important nuance: `computeVertexNormals()` is only part of the cost. In the benchmarks above it was roughly `0.5 ms` of terrain rebuilds and `2.8 ms` of the modeled-object rebuild. That means a “WASM normals only” port is too narrow; the useful unit is the whole buffer-generation pipeline.
+Important nuance: a “WASM normals only” port is likely too narrow. Profile the
+whole buffer-generation pipeline, not just `computeVertexNormals()`.
 
 ## What The WASM Version Should Look Like
 Use WASM only for coarse, pure-data kernels.
@@ -32,7 +36,7 @@ Use WASM only for coarse, pure-data kernels.
 - Run the rebuild path in a Web Worker whether or not WASM is used. On Quest-class CPUs, moving rebuild spikes off the main thread is likely as important as raw compute speed.
 
 ## Recommended Implementation Order
-- First, add a benchmark/profiling harness with representative live snapshots and measure on Quest Browser.
+- First, add a replay/profiling harness driven by representative live snapshots captured from the bridge and measure on Quest Browser.
 - Second, do the low-risk JS wins:
   - Workerize terrain/object rebuilds.
   - Replace repeated `number[]` growth plus `Float32Array` conversion with pre-sized typed arrays where practical.
@@ -42,8 +46,8 @@ Use WASM only for coarse, pure-data kernels.
 
 ## Test Plan
 - Benchmark baseline TS, TS+Worker, and WASM on desktop Chrome and Quest Browser.
-- Use at least three scene classes:
-  - large flat terrain
+- Use at least three captured live scene classes that cover:
+  - mostly flat terrain
   - modeled terrain with seam stitching
   - model-heavy object sets
 - Acceptance default:
@@ -53,6 +57,6 @@ Use WASM only for coarse, pure-data kernels.
 
 ## Assumptions
 - Primary target is Quest/mobile-class CPU, not desktop.
-- Real bridge snapshots will be much larger and more model-heavy than the sample fixture.
+- Replay fixtures should come from real bridge snapshots rather than synthetic scenes.
 - No Rust toolchain is installed in the repo today, so WASM adds build/CI complexity and should be justified by measured gains.
 - Default recommendation is “JS/Worker/instancing first, WASM second,” with modeled object generation as the first WASM candidate.

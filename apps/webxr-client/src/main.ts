@@ -17,7 +17,6 @@ import {
   type SceneObject,
   type SceneSnapshot,
   type TextureDefinition,
-  sampleSceneSnapshot,
 } from '@rune-xr/protocol';
 import {BoardScene} from './render/BoardScene.js';
 import {BridgeSocketClient} from './net/BridgeSocketClient.js';
@@ -69,7 +68,7 @@ root.innerHTML = `
         </article>
         <article class="metric">
           <span class="metric-label">Snapshot</span>
-          <span class="metric-value" data-snapshot-status>Sample fixture</span>
+          <span class="metric-value" data-snapshot-status>Awaiting bridge snapshot</span>
         </article>
         <article class="metric">
           <span class="metric-label">Object Textures</span>
@@ -87,7 +86,6 @@ root.innerHTML = `
       <div class="texture-preview-grid" data-object-texture-previews hidden></div>
       <div class="actions">
         <button class="button button-primary" type="button" data-enter-ar>Enter AR</button>
-        <button class="button button-secondary" type="button" data-load-sample>Load Sample</button>
       </div>
       <ul class="legend">
         <li><span class="swatch" style="background:#29bf6f"></span> You</li>
@@ -114,7 +112,6 @@ const wallTextureStatus = root.querySelector<HTMLElement>('[data-wall-texture-st
 const objectTexturePreviews = root.querySelector<HTMLElement>('[data-object-texture-previews]');
 const arHint = root.querySelector<HTMLElement>('[data-ar-hint]');
 const enterArButton = root.querySelector<HTMLButtonElement>('[data-enter-ar]');
-const loadSampleButton = root.querySelector<HTMLButtonElement>('[data-load-sample]');
 
 if (
   !viewport
@@ -131,7 +128,6 @@ if (
   || !objectTexturePreviews
   || !arHint
   || !enterArButton
-  || !loadSampleButton
 ) {
   throw new Error('Viewer UI failed to initialize.');
 }
@@ -194,8 +190,6 @@ const xrPlacementController = new XRPlacementController(boardScene);
 const worldState = new WorldStateStore();
 
 scene.add(boardScene.root, xrPlacementController.reticle);
-
-applySnapshot(sampleSceneSnapshot, 'Loaded sample fixture');
 
 const bridgeClient = new BridgeSocketClient({
   onActorModelBatch(models) {
@@ -260,10 +254,6 @@ renderer.setAnimationLoop((time, frame) => {
 
 window.addEventListener('resize', resizeViewport);
 resizeViewport();
-
-loadSampleButton.addEventListener('click', () => {
-  applySnapshot(sampleSceneSnapshot, 'Loaded sample fixture');
-});
 
 toggleHudButton.addEventListener('click', () => {
   setHudVisible(!hudVisible);

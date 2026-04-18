@@ -7,7 +7,6 @@
     "dev": "concurrently -n bridge,client -c blue,green \"pnpm dev:bridge\" \"pnpm dev:web\"",
     "dev:bridge": "pnpm --filter @rune-xr/protocol build && pnpm --filter @rune-xr/bridge dev",
     "dev:web": "pnpm --filter @rune-xr/protocol build && pnpm --filter @rune-xr/webxr-client dev",
-    "dev:sample": "pnpm --filter @rune-xr/bridge sample",
     "dev:runelite": "./scripts/start-runelite-dev",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test"

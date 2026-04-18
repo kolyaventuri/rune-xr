@@ -6,7 +6,7 @@ snapshots into the Rune XR bridge.
 ## What It Does
 
 - connects to the bridge WebSocket at `ws://<bridgeHost>:<bridgePort>/ws`
-- sends either synthetic snapshots or live extracted scene snapshots
+- sends live extracted scene snapshots
 - samples a configurable square around the local player
 - pushes snapshots on the RuneLite client thread at the configured interval
 
@@ -71,9 +71,10 @@ RUNELITE_DEV_HOME="$HOME" ./gradlew run
 
 Recommended first run:
 
-1. leave `Synthetic mode` enabled
-2. confirm the bridge receives snapshots
-3. disable `Synthetic mode` to switch to live scene extraction
+1. launch the bridge first
+2. start the developer RuneLite client
+3. log into RuneLite and enable `Rune XR`
+4. confirm the bridge receives live snapshots
 
 ## Sideloading Into RuneLite
 
@@ -122,7 +123,6 @@ Default values are:
 - `bridgePort`: `8787`
 - `tileRadius`: `12`
 - `updateRateMs`: `200`
-- `syntheticMode`: `true`
 
 Those defaults assume RuneLite and the bridge are running on the same machine.
 If you move the bridge to another laptop or desktop on the LAN, change
@@ -130,18 +130,11 @@ If you move the bridge to another laptop or desktop on the LAN, change
 
 ## Runtime Notes
 
-The plugin supports two useful modes:
-
-- `syntheticMode = true`
-  The plugin produces deterministic fake terrain, actors, and objects. This is
-  the safest way to validate the bridge and WebXR client first.
-- `syntheticMode = false`
-  The plugin samples live tile heights, nearby players and NPCs, and coarse
-  scene objects from the active RuneLite scene.
-
-While the plugin is running, bridge host/port changes reconnect live, update
-rate changes reschedule the snapshot loop, and failed sends no longer suppress
-future retries for unchanged snapshots.
+The plugin samples live tile heights, nearby players and NPCs, and coarse
+scene objects from the active RuneLite scene. While the plugin is running,
+bridge host/port changes reconnect live, update rate changes reschedule the
+snapshot loop, and failed sends no longer suppress future retries for unchanged
+snapshots.
 
 ## References
 
