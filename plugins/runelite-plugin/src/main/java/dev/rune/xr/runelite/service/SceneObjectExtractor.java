@@ -17,12 +17,12 @@ import net.runelite.api.coords.WorldPoint;
 final class SceneObjectExtractor
 {
     private final net.runelite.api.Client client;
-    private final ModelPayloadExtractor modelPayloadExtractor;
+    private final ObjectModelExtractor objectModelExtractor;
 
-    SceneObjectExtractor(net.runelite.api.Client client, ModelPayloadExtractor modelPayloadExtractor)
+    SceneObjectExtractor(net.runelite.api.Client client, ObjectModelExtractor objectModelExtractor)
     {
         this.client = client;
-        this.modelPayloadExtractor = modelPayloadExtractor;
+        this.objectModelExtractor = objectModelExtractor;
     }
 
     List<SceneObjectPayload> collectObjects(WorldPoint origin, int radius, int plane)
@@ -128,7 +128,7 @@ final class SceneObjectExtractor
 
     private SceneObjectPayload buildWallPayload(WallObject wall, int plane)
     {
-        if (!ModelPayloadExtractor.hasRenderable(wall.getRenderable1(), wall.getRenderable2()))
+        if (!RenderableModelResolver.hasRenderable(wall.getRenderable1(), wall.getRenderable2()))
         {
             return null;
         }
@@ -142,13 +142,13 @@ final class SceneObjectExtractor
             0,
             wallOrientationA,
             wallOrientationB,
-            modelPayloadExtractor.extractWallModel(wall)
+            objectModelExtractor.extractWallModel(wall)
         );
     }
 
     private SceneObjectPayload buildGameObjectPayload(GameObject gameObject, int plane, int gameIndex)
     {
-        if (!ModelPayloadExtractor.hasRenderable(gameObject.getRenderable()))
+        if (!RenderableModelResolver.hasRenderable(gameObject.getRenderable()))
         {
             return null;
         }
@@ -156,7 +156,7 @@ final class SceneObjectExtractor
         ObjectComposition composition = resolveObjectComposition(gameObject.getId());
         WorldPoint point = gameObject.getWorldLocation();
         String name = resolveObjectName("Game object", composition);
-        TileSurfaceModelPayload model = modelPayloadExtractor.extractGameObjectModel(gameObject);
+        TileSurfaceModelPayload model = objectModelExtractor.extractGameObjectModel(gameObject);
 
         if (!shouldEmitObjectPayload("game", name, model))
         {
@@ -229,7 +229,7 @@ final class SceneObjectExtractor
     {
         if (object instanceof DecorativeObject decorativeObject)
         {
-            if (!ModelPayloadExtractor.hasRenderable(decorativeObject.getRenderable(), decorativeObject.getRenderable2()))
+            if (!RenderableModelResolver.hasRenderable(decorativeObject.getRenderable(), decorativeObject.getRenderable2()))
             {
                 return null;
             }
@@ -241,13 +241,13 @@ final class SceneObjectExtractor
                 variantIndex,
                 wallOrientationA,
                 wallOrientationB,
-                modelPayloadExtractor.extractDecorativeObjectModel(decorativeObject)
+                objectModelExtractor.extractDecorativeObjectModel(decorativeObject)
             );
         }
 
         if (object instanceof GroundObject groundObject)
         {
-            if (!ModelPayloadExtractor.hasRenderable(groundObject.getRenderable()))
+            if (!RenderableModelResolver.hasRenderable(groundObject.getRenderable()))
             {
                 return null;
             }
@@ -259,7 +259,7 @@ final class SceneObjectExtractor
                 variantIndex,
                 wallOrientationA,
                 wallOrientationB,
-                modelPayloadExtractor.extractGroundObjectModel(groundObject)
+                objectModelExtractor.extractGroundObjectModel(groundObject)
             );
         }
 

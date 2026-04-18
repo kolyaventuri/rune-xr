@@ -29,16 +29,17 @@ public final class SceneExtractor
 
     private final Client client;
     private final SceneTileSurfaceExtractor tileSurfaceExtractor;
-    private final ModelPayloadExtractor modelPayloadExtractor;
+    private final ActorModelExtractor actorModelExtractor;
     private final SceneObjectExtractor sceneObjectExtractor;
 
     public SceneExtractor(Client client)
     {
         this.client = client;
         Map<Integer, Integer> textureColorCache = new HashMap<>();
+        ModelGeometryExtractor geometryExtractor = new ModelGeometryExtractor(client, textureColorCache);
         this.tileSurfaceExtractor = new SceneTileSurfaceExtractor(client, textureColorCache);
-        this.modelPayloadExtractor = new ModelPayloadExtractor(client, textureColorCache);
-        this.sceneObjectExtractor = new SceneObjectExtractor(client, modelPayloadExtractor);
+        this.actorModelExtractor = new ActorModelExtractor(geometryExtractor);
+        this.sceneObjectExtractor = new SceneObjectExtractor(client, new ObjectModelExtractor(client, geometryExtractor));
     }
 
     public Optional<SceneSnapshotPayload> extract(int radius)
@@ -137,8 +138,8 @@ public final class SceneExtractor
     {
         String name = preferName ? actor.getName() : actor.getName() != null ? actor.getName() : "NPC";
         String actorId = buildActorId(actor, type, name);
-        String modelKey = modelPayloadExtractor.actorModelKey(actor);
-        TileSurfaceModelPayload model = modelPayloadExtractor.extractActorModel(actor, modelKey);
+        String modelKey = actorModelExtractor.actorModelKey(actor);
+        TileSurfaceModelPayload model = actorModelExtractor.extractActorModel(actor, modelKey);
         LocalPoint localPoint = actor.getLocalLocation();
         Double preciseX = localPoint == null ? null : preciseTileCoordinate(point.getX(), localPoint.getX());
         Double preciseY = localPoint == null ? null : preciseTileCoordinate(point.getY(), localPoint.getY());
@@ -208,12 +209,12 @@ public final class SceneExtractor
 
     static boolean hasRenderable(Renderable... renderables)
     {
-        return ModelPayloadExtractor.hasRenderable(renderables);
+        return RenderableModelResolver.hasRenderable(renderables);
     }
 
     static Model resolveRenderableModel(Renderable renderable)
     {
-        return ModelPayloadExtractor.resolveRenderableModel(renderable);
+        return RenderableModelResolver.resolveRenderableModel(renderable);
     }
 
     static Integer resolveBridgeHeight(Tile tile, int sceneX, int sceneY, int[][][] heights)
