@@ -1,17 +1,23 @@
 import {
+  type ActorsFrame,
   createHelloMessage,
   type ActorModelDefinition,
+  type ObjectsSnapshot,
   parseProtocolMessage,
   type ObjectModelDefinition,
   type ProtocolMessage,
   type SceneSnapshot,
+  type TerrainSnapshot,
   type TextureDefinition,
 } from '@rune-xr/protocol';
 
 type BridgeSocketClientOptions = {
+  onActorsFrame: (frame: ActorsFrame) => void;
   onActorModelBatch: (models: ActorModelDefinition[]) => void;
   onObjectModelBatch: (models: ObjectModelDefinition[]) => void;
-  onSnapshot: (snapshot: SceneSnapshot) => void;
+  onObjectsSnapshot: (snapshot: ObjectsSnapshot) => void;
+  onSnapshot?: (snapshot: SceneSnapshot) => void;
+  onTerrainSnapshot: (snapshot: TerrainSnapshot) => void;
   onTextureBatch: (textures: TextureDefinition[]) => void;
   onStatus: (status: string) => void;
 };
@@ -70,8 +76,23 @@ export class BridgeSocketClient {
   }
 
   private handleMessage(message: ProtocolMessage) {
+    if (message.kind === 'terrain_snapshot') {
+      this.options.onTerrainSnapshot(message);
+      return;
+    }
+
+    if (message.kind === 'objects_snapshot') {
+      this.options.onObjectsSnapshot(message);
+      return;
+    }
+
+    if (message.kind === 'actors_frame') {
+      this.options.onActorsFrame(message);
+      return;
+    }
+
     if (message.kind === 'scene_snapshot') {
-      this.options.onSnapshot(message.snapshot);
+      this.options.onSnapshot?.(message.snapshot);
       return;
     }
 

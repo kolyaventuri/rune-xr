@@ -1,4 +1,12 @@
-import type {Actor, SceneSnapshot} from '@rune-xr/protocol';
+import {
+  createWindowKey,
+  protocolVersion,
+  type Actor,
+  type ActorsFrame,
+  type ObjectsSnapshot,
+  type SceneSnapshot,
+  type TerrainSnapshot,
+} from '@rune-xr/protocol';
 import {ACTOR_INTERPOLATION_MS} from '../config.js';
 
 export type InterpolatedActor = Actor & {
@@ -15,39 +23,74 @@ export type SnapshotUpdate = {
 export class WorldStateStore {
   private currentSnapshot: SceneSnapshot | undefined;
   private previousSnapshot: SceneSnapshot | undefined;
+  private terrainSnapshot: TerrainSnapshot | undefined;
+  private objectsSnapshot: ObjectsSnapshot | undefined;
+  private actorsFrame: ActorsFrame | undefined;
+  private currentWindowKey: string | undefined;
   private actorSignature = '';
   private terrainSignature = '';
   private objectSignature = '';
   private receivedAt = 0;
 
   applySnapshot(snapshot: SceneSnapshot, receivedAt = performance.now()): SnapshotUpdate {
-    const nextActorSignature = makeActorSignature(snapshot);
-    const nextTerrainSignature = makeTerrainSignature(snapshot);
-    const nextObjectSignature = makeObjectSignature(snapshot);
-    const actorsChanged = nextActorSignature !== this.actorSignature;
-    const terrainChanged = nextTerrainSignature !== this.terrainSignature;
-    const objectsChanged = nextObjectSignature !== this.objectSignature;
+    const windowKey = createWindowKey(snapshot.plane, snapshot.baseX, snapshot.baseY);
 
-    if (!actorsChanged && !terrainChanged && !objectsChanged) {
-      return {
-        changed: false,
-        terrainChanged,
-        objectsChanged,
-      };
+    this.currentWindowKey = windowKey;
+    this.terrainSnapshot = {
+      version: protocolVersion,
+      timestamp: snapshot.timestamp,
+      windowKey,
+      baseX: snapshot.baseX,
+      baseY: snapshot.baseY,
+      plane: snapshot.plane,
+      tiles: snapshot.tiles,
+    };
+    this.objectsSnapshot = {
+      version: protocolVersion,
+      timestamp: snapshot.timestamp,
+      windowKey,
+      objects: snapshot.objects,
+    };
+    this.actorsFrame = {
+      version: protocolVersion,
+      timestamp: snapshot.timestamp,
+      windowKey,
+      actors: snapshot.actors,
+    };
+
+    return this.commitSnapshot(snapshot, receivedAt);
+  }
+
+  applyTerrainSnapshot(snapshot: TerrainSnapshot, receivedAt = performance.now()): SnapshotUpdate {
+    const windowChanged = snapshot.windowKey !== this.currentWindowKey;
+
+    this.currentWindowKey = snapshot.windowKey;
+    this.terrainSnapshot = snapshot;
+
+    if (windowChanged) {
+      this.objectsSnapshot = undefined;
+      this.actorsFrame = undefined;
     }
 
-    this.previousSnapshot = this.currentSnapshot;
-    this.currentSnapshot = snapshot;
-    this.receivedAt = receivedAt;
-    this.actorSignature = nextActorSignature;
-    this.terrainSignature = nextTerrainSignature;
-    this.objectSignature = nextObjectSignature;
+    return this.commitComposedSnapshot(receivedAt);
+  }
 
-    return {
-      changed: true,
-      terrainChanged,
-      objectsChanged,
-    };
+  applyObjectsSnapshot(snapshot: ObjectsSnapshot, receivedAt = performance.now()): SnapshotUpdate {
+    if (!this.terrainSnapshot || snapshot.windowKey !== this.currentWindowKey) {
+      return unchangedSnapshotUpdate();
+    }
+
+    this.objectsSnapshot = snapshot;
+    return this.commitComposedSnapshot(receivedAt);
+  }
+
+  applyActorsFrame(frame: ActorsFrame, receivedAt = performance.now()): SnapshotUpdate {
+    if (!this.terrainSnapshot || frame.windowKey !== this.currentWindowKey) {
+      return unchangedSnapshotUpdate();
+    }
+
+    this.actorsFrame = frame;
+    return this.commitComposedSnapshot(receivedAt);
   }
 
   getCurrentSnapshot() {
@@ -90,6 +133,79 @@ export class WorldStateStore {
       };
     });
   }
+
+  private commitComposedSnapshot(receivedAt: number) {
+    const snapshot = composeSnapshot(this.terrainSnapshot, this.objectsSnapshot, this.actorsFrame);
+
+    if (!snapshot) {
+      return unchangedSnapshotUpdate();
+    }
+
+    return this.commitSnapshot(snapshot, receivedAt);
+  }
+
+  private commitSnapshot(snapshot: SceneSnapshot, receivedAt: number): SnapshotUpdate {
+    const nextActorSignature = makeActorSignature(snapshot);
+    const nextTerrainSignature = makeTerrainSignature(snapshot);
+    const nextObjectSignature = makeObjectSignature(snapshot);
+    const actorsChanged = nextActorSignature !== this.actorSignature;
+    const terrainChanged = nextTerrainSignature !== this.terrainSignature;
+    const objectsChanged = nextObjectSignature !== this.objectSignature;
+
+    if (!actorsChanged && !terrainChanged && !objectsChanged) {
+      return {
+        changed: false,
+        terrainChanged,
+        objectsChanged,
+      };
+    }
+
+    this.previousSnapshot = this.currentSnapshot;
+    this.currentSnapshot = snapshot;
+    this.receivedAt = receivedAt;
+    this.actorSignature = nextActorSignature;
+    this.terrainSignature = nextTerrainSignature;
+    this.objectSignature = nextObjectSignature;
+
+    return {
+      changed: true,
+      terrainChanged,
+      objectsChanged,
+    };
+  }
+}
+
+function composeSnapshot(
+  terrainSnapshot: TerrainSnapshot | undefined,
+  objectsSnapshot: ObjectsSnapshot | undefined,
+  actorsFrame: ActorsFrame | undefined,
+): SceneSnapshot | undefined {
+  if (!terrainSnapshot) {
+    return undefined;
+  }
+
+  return {
+    version: terrainSnapshot.version,
+    timestamp: Math.max(
+      terrainSnapshot.timestamp,
+      objectsSnapshot?.timestamp ?? terrainSnapshot.timestamp,
+      actorsFrame?.timestamp ?? terrainSnapshot.timestamp,
+    ),
+    baseX: terrainSnapshot.baseX,
+    baseY: terrainSnapshot.baseY,
+    plane: terrainSnapshot.plane,
+    tiles: terrainSnapshot.tiles,
+    objects: objectsSnapshot?.objects ?? [],
+    actors: actorsFrame?.actors ?? [],
+  };
+}
+
+function unchangedSnapshotUpdate(): SnapshotUpdate {
+  return {
+    changed: false,
+    terrainChanged: false,
+    objectsChanged: false,
+  };
 }
 
 function actorExactX(actor: Pick<Actor, 'x' | 'preciseX'>) {

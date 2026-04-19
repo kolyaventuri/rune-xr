@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {sampleSceneSnapshot} from '@rune-xr/protocol';
+import {createWindowKey, protocolVersion, sampleSceneSnapshot} from '@rune-xr/protocol';
 import {WorldStateStore} from '../world/WorldStateStore.js';
 
 describe('WorldStateStore', () => {
@@ -278,5 +278,138 @@ describe('WorldStateStore', () => {
     expect(update.changed).toBe(true);
     expect(update.terrainChanged).toBe(false);
     expect(update.objectsChanged).toBe(false);
+  });
+
+  it('treats actor frames as actor-only updates when terrain and objects are unchanged', () => {
+    const store = new WorldStateStore();
+    const windowKey = createWindowKey(sampleSceneSnapshot.plane, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY);
+
+    store.applyTerrainSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles,
+    }, 0);
+    store.applyObjectsSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      objects: sampleSceneSnapshot.objects,
+    }, 0);
+    store.applyActorsFrame({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      actors: sampleSceneSnapshot.actors,
+    }, 0);
+
+    const update = store.applyActorsFrame({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      windowKey,
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {
+          ...actor,
+          preciseX: actor.x + 0.75,
+        }
+        : actor),
+    }, 100);
+
+    expect(update.changed).toBe(true);
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(false);
+  });
+
+  it('treats object snapshots as object-only updates when terrain is unchanged', () => {
+    const store = new WorldStateStore();
+    const windowKey = createWindowKey(sampleSceneSnapshot.plane, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY);
+
+    store.applyTerrainSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles,
+    }, 0);
+    store.applyObjectsSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      objects: sampleSceneSnapshot.objects,
+    }, 0);
+    store.applyActorsFrame({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      actors: sampleSceneSnapshot.actors,
+    }, 0);
+
+    const update = store.applyObjectsSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      windowKey,
+      objects: sampleSceneSnapshot.objects.map(object => object.id === 'wall_house_sw'
+        ? {
+          ...object,
+          wallOrientationB: 2,
+        }
+        : object),
+    }, 100);
+
+    expect(update.changed).toBe(true);
+    expect(update.terrainChanged).toBe(false);
+    expect(update.objectsChanged).toBe(true);
+  });
+
+  it('preserves composed objects while terrain snapshots change within the same window', () => {
+    const store = new WorldStateStore();
+    const windowKey = createWindowKey(sampleSceneSnapshot.plane, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY);
+
+    store.applyTerrainSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles,
+    }, 0);
+    store.applyObjectsSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      objects: sampleSceneSnapshot.objects,
+    }, 0);
+    store.applyActorsFrame({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      actors: sampleSceneSnapshot.actors,
+    }, 0);
+
+    const update = store.applyTerrainSnapshot({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      windowKey,
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles.map(tile => tile.x === sampleSceneSnapshot.baseX && tile.y === sampleSceneSnapshot.baseY
+        ? {
+          ...tile,
+          height: tile.height + 2,
+        }
+        : tile),
+    }, 100);
+
+    expect(update.changed).toBe(true);
+    expect(update.terrainChanged).toBe(true);
+    expect(update.objectsChanged).toBe(false);
+    expect(store.getCurrentSnapshot()?.objects).toEqual(sampleSceneSnapshot.objects);
   });
 });

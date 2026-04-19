@@ -192,6 +192,10 @@ const worldState = new WorldStateStore();
 scene.add(boardScene.root, xrPlacementController.reticle);
 
 const bridgeClient = new BridgeSocketClient({
+  onActorsFrame(frame) {
+    const update = worldState.applyActorsFrame(frame);
+    applyWorldUpdate(update, `Actors @ ${new Date(frame.timestamp).toLocaleTimeString()}`);
+  },
   onActorModelBatch(models) {
     cacheActorModels(models);
     boardScene.applyActorModelBatch(models);
@@ -211,8 +215,17 @@ const bridgeClient = new BridgeSocketClient({
     currentTexturePreviewDescriptors = collectTexturePreviewDescriptors(snapshot, objectModelStore);
     renderObjectTexturePreviews();
   },
+  onObjectsSnapshot(snapshot) {
+    const update = worldState.applyObjectsSnapshot(snapshot);
+    applyWorldUpdate(update, `Objects @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
+  },
   onSnapshot(snapshot) {
-    applySnapshot(snapshot, `Live @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
+    const update = worldState.applySnapshot(snapshot);
+    applyWorldUpdate(update, `Live @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
+  },
+  onTerrainSnapshot(snapshot) {
+    const update = worldState.applyTerrainSnapshot(snapshot);
+    applyWorldUpdate(update, `Terrain @ ${new Date(snapshot.timestamp).toLocaleTimeString()}`);
   },
   onTextureBatch(textures) {
     cacheTexturePreviews(textures);
@@ -399,8 +412,15 @@ enterArButton.addEventListener('click', async () => {
   }, {once: true});
 });
 
-function applySnapshot(snapshot: SceneSnapshot, label: string) {
-  const update = worldState.applySnapshot(snapshot);
+function applyWorldUpdate(
+  update: ReturnType<WorldStateStore['applySnapshot']>,
+  label: string,
+) {
+  const snapshot = worldState.getCurrentSnapshot();
+
+  if (!snapshot) {
+    return;
+  }
 
   boardScene.applySnapshot(snapshot, {
     terrainChanged: update.terrainChanged,

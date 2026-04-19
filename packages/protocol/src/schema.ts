@@ -1,6 +1,12 @@
 import {z} from 'zod';
 
-export const protocolVersion = 1;
+export const protocolVersion = 2;
+
+const legacySnapshotVersions = [1, protocolVersion] as const;
+const sceneSnapshotVersionSchema = z.union(legacySnapshotVersions.map(version => z.literal(version)) as [
+	z.ZodLiteral<(typeof legacySnapshotVersions)[number]>,
+	z.ZodLiteral<(typeof legacySnapshotVersions)[number]>,
+]);
 
 export const actorTypeSchema = z.enum(['self', 'player', 'npc']);
 export const objectKindSchema = z.enum(['game', 'wall', 'decor', 'ground']);
@@ -96,7 +102,7 @@ export const actorModelDefinitionSchema = z.object({
 });
 
 export const sceneSnapshotSchema = z.object({
-	version: z.literal(protocolVersion),
+	version: sceneSnapshotVersionSchema,
 	timestamp: z.number().int().nonnegative(),
 	baseX: z.number().int(),
 	baseY: z.number().int(),
@@ -104,6 +110,32 @@ export const sceneSnapshotSchema = z.object({
 	tiles: z.array(tileSchema),
 	actors: z.array(actorSchema),
 	objects: z.array(sceneObjectSchema),
+});
+
+export const windowKeySchema = z.string().min(1);
+
+export const terrainSnapshotSchema = z.object({
+	version: z.literal(protocolVersion),
+	timestamp: z.number().int().nonnegative(),
+	windowKey: windowKeySchema,
+	baseX: z.number().int(),
+	baseY: z.number().int(),
+	plane: z.number().int().nonnegative(),
+	tiles: z.array(tileSchema),
+});
+
+export const objectsSnapshotSchema = z.object({
+	version: z.literal(protocolVersion),
+	timestamp: z.number().int().nonnegative(),
+	windowKey: windowKeySchema,
+	objects: z.array(sceneObjectSchema),
+});
+
+export const actorsFrameSchema = z.object({
+	version: z.literal(protocolVersion),
+	timestamp: z.number().int().nonnegative(),
+	windowKey: windowKeySchema,
+	actors: z.array(actorSchema),
 });
 
 export const textureDefinitionSchema = z.object({
@@ -123,6 +155,9 @@ export type SceneObject = z.infer<typeof sceneObjectSchema>;
 export type ObjectModelDefinition = z.infer<typeof objectModelDefinitionSchema>;
 export type ActorModelDefinition = z.infer<typeof actorModelDefinitionSchema>;
 export type SceneSnapshot = z.infer<typeof sceneSnapshotSchema>;
+export type TerrainSnapshot = z.infer<typeof terrainSnapshotSchema>;
+export type ObjectsSnapshot = z.infer<typeof objectsSnapshotSchema>;
+export type ActorsFrame = z.infer<typeof actorsFrameSchema>;
 export type TextureDefinition = z.infer<typeof textureDefinitionSchema>;
 export type ActorType = z.infer<typeof actorTypeSchema>;
 export type ObjectKind = z.infer<typeof objectKindSchema>;
@@ -134,4 +169,8 @@ export function parseSceneSnapshot(input: unknown): SceneSnapshot {
 
 export function safeParseSceneSnapshot(input: unknown) {
 	return sceneSnapshotSchema.safeParse(input);
+}
+
+export function createWindowKey(plane: number, baseX: number, baseY: number) {
+	return `${plane}:${baseX}:${baseY}`;
 }

@@ -31,6 +31,59 @@ class PayloadSerializationTest
     }
 
     @Test
+    void serializesTerrainSnapshot()
+    {
+        TerrainSnapshotPayload snapshot = new TerrainSnapshotPayload(
+            ProtocolMessages.VERSION,
+            1L,
+            "0:3200:3200",
+            3200,
+            3200,
+            0,
+            List.of(new TilePayload(3200, 3200, 0, 0, null))
+        );
+        String json = gson.toJson(ProtocolMessages.TerrainSnapshotMessage.fromSnapshot(snapshot));
+
+        assertTrue(json.contains("\"kind\":\"terrain_snapshot\""));
+        assertTrue(json.contains("\"windowKey\":\"0:3200:3200\""));
+        assertTrue(json.contains("\"tiles\""));
+    }
+
+    @Test
+    void serializesObjectsSnapshot()
+    {
+        ObjectsSnapshotPayload snapshot = new ObjectsSnapshotPayload(
+            ProtocolMessages.VERSION,
+            1L,
+            "0:3200:3200",
+            List.of(new SceneObjectPayload("tree", "game", "Tree", 3200, 3201, 0, 1, 1, null, null, null, "object-model:tree", null))
+        );
+        String json = gson.toJson(ProtocolMessages.ObjectsSnapshotMessage.fromSnapshot(snapshot));
+
+        assertTrue(json.contains("\"kind\":\"objects_snapshot\""));
+        assertTrue(json.contains("\"windowKey\":\"0:3200:3200\""));
+        assertTrue(json.contains("\"modelKey\":\"object-model:tree\""));
+        assertTrue(!json.contains("\"model\":{"));
+    }
+
+    @Test
+    void serializesActorsFrame()
+    {
+        ActorsFramePayload frame = new ActorsFramePayload(
+            ProtocolMessages.VERSION,
+            1L,
+            "0:3200:3200",
+            List.of(new ActorPayload("self", "self", "Kolya", 3200, 3200, 0, 3200.5, 3200.5, 180, 1, "actor-model:self", null))
+        );
+        String json = gson.toJson(ProtocolMessages.ActorsFrameMessage.fromFrame(frame));
+
+        assertTrue(json.contains("\"kind\":\"actors_frame\""));
+        assertTrue(json.contains("\"windowKey\":\"0:3200:3200\""));
+        assertTrue(json.contains("\"modelKey\":\"actor-model:self\""));
+        assertTrue(!json.contains("\"model\":{"));
+    }
+
+    @Test
     void serializesTextureBatch()
     {
         TextureBatchPayload batch = new TextureBatchPayload(List.of(

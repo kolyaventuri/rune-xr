@@ -1,10 +1,13 @@
 import {z} from 'zod';
 import {
+	actorsFrameSchema,
 	actorModelDefinitionSchema,
 	clientRoleSchema,
 	objectModelDefinitionSchema,
+	objectsSnapshotSchema,
 	protocolVersion,
 	sceneSnapshotSchema,
+	terrainSnapshotSchema,
 	textureDefinitionSchema,
 } from './schema.js';
 
@@ -18,6 +21,18 @@ export const helloMessageSchema = z.object({
 export const sceneSnapshotMessageSchema = z.object({
 	kind: z.literal('scene_snapshot'),
 	snapshot: sceneSnapshotSchema,
+});
+
+export const terrainSnapshotMessageSchema = terrainSnapshotSchema.extend({
+	kind: z.literal('terrain_snapshot'),
+});
+
+export const objectsSnapshotMessageSchema = objectsSnapshotSchema.extend({
+	kind: z.literal('objects_snapshot'),
+});
+
+export const actorsFrameMessageSchema = actorsFrameSchema.extend({
+	kind: z.literal('actors_frame'),
 });
 
 export const textureBatchMessageSchema = z.object({
@@ -42,7 +57,17 @@ export const pingMessageSchema = z.object({
 
 export const ackMessageSchema = z.object({
 	kind: z.literal('ack'),
-	ackedKind: z.enum(['hello', 'scene_snapshot', 'texture_batch', 'object_model_batch', 'actor_model_batch', 'ping']),
+	ackedKind: z.enum([
+		'hello',
+		'scene_snapshot',
+		'terrain_snapshot',
+		'objects_snapshot',
+		'actors_frame',
+		'texture_batch',
+		'object_model_batch',
+		'actor_model_batch',
+		'ping',
+	]),
 	serverTime: z.number().int().nonnegative(),
 	detail: z.string().min(1).optional(),
 });
@@ -56,6 +81,9 @@ export const errorMessageSchema = z.object({
 export const protocolMessageSchema = z.discriminatedUnion('kind', [
 	helloMessageSchema,
 	sceneSnapshotMessageSchema,
+	terrainSnapshotMessageSchema,
+	objectsSnapshotMessageSchema,
+	actorsFrameMessageSchema,
 	textureBatchMessageSchema,
 	objectModelBatchMessageSchema,
 	actorModelBatchMessageSchema,
@@ -66,6 +94,9 @@ export const protocolMessageSchema = z.discriminatedUnion('kind', [
 
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
 export type SceneSnapshotMessage = z.infer<typeof sceneSnapshotMessageSchema>;
+export type TerrainSnapshotMessage = z.infer<typeof terrainSnapshotMessageSchema>;
+export type ObjectsSnapshotMessage = z.infer<typeof objectsSnapshotMessageSchema>;
+export type ActorsFrameMessage = z.infer<typeof actorsFrameMessageSchema>;
 export type TextureBatchMessage = z.infer<typeof textureBatchMessageSchema>;
 export type ObjectModelBatchMessage = z.infer<typeof objectModelBatchMessageSchema>;
 export type ActorModelBatchMessage = z.infer<typeof actorModelBatchMessageSchema>;
@@ -95,6 +126,33 @@ export function createPingMessage(sentAt = Date.now()): PingMessage {
 	return {
 		kind: 'ping',
 		sentAt,
+	};
+}
+
+export function createTerrainSnapshotMessage(
+	snapshot: Omit<TerrainSnapshotMessage, 'kind'>,
+): TerrainSnapshotMessage {
+	return {
+		kind: 'terrain_snapshot',
+		...snapshot,
+	};
+}
+
+export function createObjectsSnapshotMessage(
+	snapshot: Omit<ObjectsSnapshotMessage, 'kind'>,
+): ObjectsSnapshotMessage {
+	return {
+		kind: 'objects_snapshot',
+		...snapshot,
+	};
+}
+
+export function createActorsFrameMessage(
+	frame: Omit<ActorsFrameMessage, 'kind'>,
+): ActorsFrameMessage {
+	return {
+		kind: 'actors_frame',
+		...frame,
 	};
 }
 

@@ -1,4 +1,4 @@
-import type {SceneSnapshot, TileSurfaceModel} from '../schema.js';
+import {protocolVersion, type SceneSnapshot, type TileSurfaceModel} from '../schema.js';
 
 const selfActorModel = createHumanoidActorModel({
 	skin: 0xd7b691,
@@ -87,7 +87,7 @@ function mergeModels(...models: TileSurfaceModel[]): TileSurfaceModel {
 }
 
 export const sampleSceneSnapshot: SceneSnapshot = {
-	version: 1,
+	version: protocolVersion,
 	timestamp: 1_710_000_000_000,
 	baseX: 3200,
 	baseY: 3190,

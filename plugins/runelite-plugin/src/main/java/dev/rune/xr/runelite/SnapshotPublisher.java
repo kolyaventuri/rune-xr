@@ -4,10 +4,15 @@ import com.google.gson.Gson;
 import dev.rune.xr.runelite.config.RuneXrConfig;
 import dev.rune.xr.runelite.model.ActorModelBatchPayload;
 import dev.rune.xr.runelite.model.ActorModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ActorsFramePayload;
+import dev.rune.xr.runelite.model.ActorsFrameState;
 import dev.rune.xr.runelite.model.ObjectModelBatchPayload;
 import dev.rune.xr.runelite.model.ObjectModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ObjectsSnapshotPayload;
+import dev.rune.xr.runelite.model.ObjectsSnapshotState;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
-import dev.rune.xr.runelite.model.SceneSnapshotState;
+import dev.rune.xr.runelite.model.TerrainSnapshotPayload;
+import dev.rune.xr.runelite.model.TerrainSnapshotState;
 import dev.rune.xr.runelite.model.TextureBatchPayload;
 import dev.rune.xr.runelite.model.TextureDefinitionPayload;
 import dev.rune.xr.runelite.service.BridgeClientService;
@@ -27,12 +32,27 @@ final class SnapshotPublisher
     private final Gson gson;
     private final RuneXrConfig config;
     private final BridgeClientService bridgeClient;
-    private final SceneExtractor sceneExtractor;
-    private final CoordinateDumpWriter coordinateDumpWriter;
-    private SceneSnapshotState lastSnapshotState;
+    private final TextureDefinitionResolver textureDefinitionResolver;
+    private final SnapshotDumpWriter snapshotDumpWriter;
+    private TerrainSnapshotState lastTerrainState;
+    private ObjectsSnapshotState lastObjectsState;
+    private ActorsFrameState lastActorsState;
+    private String lastWindowKey;
     private final Set<String> sentActorModelKeys = new LinkedHashSet<>();
     private final Set<String> sentObjectModelKeys = new LinkedHashSet<>();
     private final Set<Integer> sentTextureIds = new LinkedHashSet<>();
+
+    @FunctionalInterface
+    interface TextureDefinitionResolver
+    {
+        List<TextureDefinitionPayload> extractTextureDefinitions(Iterable<Integer> textureIds);
+    }
+
+    @FunctionalInterface
+    interface SnapshotDumpWriter
+    {
+        void maybeDump(SceneSnapshotPayload snapshot);
+    }
 
     SnapshotPublisher(
         Gson gson,
@@ -42,23 +62,46 @@ final class SnapshotPublisher
         CoordinateDumpWriter coordinateDumpWriter
     )
     {
+        this(
+            gson,
+            config,
+            bridgeClient,
+            sceneExtractor::extractTextureDefinitions,
+            coordinateDumpWriter::maybeDump
+        );
+    }
+
+    SnapshotPublisher(
+        Gson gson,
+        RuneXrConfig config,
+        BridgeClientService bridgeClient,
+        TextureDefinitionResolver textureDefinitionResolver,
+        SnapshotDumpWriter snapshotDumpWriter
+    )
+    {
         this.gson = gson;
         this.config = config;
         this.bridgeClient = bridgeClient;
-        this.sceneExtractor = sceneExtractor;
-        this.coordinateDumpWriter = coordinateDumpWriter;
+        this.textureDefinitionResolver = textureDefinitionResolver;
+        this.snapshotDumpWriter = snapshotDumpWriter;
     }
 
     void publish(SceneSnapshotPayload snapshot)
     {
         RuneXrPlugin.SnapshotTransportBundle transportBundle = SnapshotTransportPlanner.splitModels(snapshot);
-        SceneSnapshotState snapshotState = SceneSnapshotState.fromSnapshot(transportBundle.snapshot());
-        boolean shouldSendSnapshot = !snapshotState.equals(lastSnapshotState) || !bridgeClient.isConnected(config);
-
-        if (shouldSendSnapshot)
-        {
-            coordinateDumpWriter.maybeDump(snapshot);
-        }
+        SceneSnapshotPayload transportSnapshot = transportBundle.snapshot();
+        String windowKey = SnapshotTransportPlanner.windowKey(transportSnapshot);
+        TerrainSnapshotPayload terrainSnapshot = SnapshotTransportPlanner.terrainSnapshot(transportSnapshot, windowKey);
+        ObjectsSnapshotPayload objectsSnapshot = SnapshotTransportPlanner.objectsSnapshot(transportSnapshot, windowKey);
+        ActorsFramePayload actorsFrame = SnapshotTransportPlanner.actorsFrame(transportSnapshot, windowKey);
+        TerrainSnapshotState terrainState = TerrainSnapshotState.fromSnapshot(terrainSnapshot);
+        ObjectsSnapshotState objectsState = ObjectsSnapshotState.fromSnapshot(objectsSnapshot);
+        ActorsFrameState actorsState = ActorsFrameState.fromSnapshot(actorsFrame);
+        boolean bridgeDisconnected = !bridgeClient.isConnected(config);
+        boolean windowChanged = lastWindowKey == null || !windowKey.equals(lastWindowKey);
+        boolean shouldSendTerrain = bridgeDisconnected || windowChanged || !terrainState.equals(lastTerrainState);
+        boolean shouldSendObjects = bridgeDisconnected || windowChanged || !objectsState.equals(lastObjectsState);
+        boolean shouldSendActors = bridgeDisconnected || windowChanged || !actorsState.equals(lastActorsState);
 
         if (!sendPendingActorModels(transportBundle.actorModelDefinitions()))
         {
@@ -72,25 +115,62 @@ final class SnapshotPublisher
             return;
         }
 
-        if (shouldSendSnapshot)
+        if (!sendPendingTextures(transportSnapshot, transportBundle.objectModelDefinitions()))
         {
-            SceneSnapshotPayload transportSnapshot = bridgeClient.sendSnapshot(config, transportBundle.snapshot());
+            clearState();
+            return;
+        }
 
-            if (transportSnapshot == null)
+        if (!shouldSendTerrain && !shouldSendObjects && !shouldSendActors)
+        {
+            return;
+        }
+
+        snapshotDumpWriter.maybeDump(snapshot);
+
+        if (shouldSendTerrain)
+        {
+            TerrainSnapshotPayload sentTerrainSnapshot = bridgeClient.sendTerrainSnapshot(config, terrainSnapshot);
+
+            if (sentTerrainSnapshot == null)
             {
                 clearState();
                 return;
             }
 
-            lastSnapshotState = SceneSnapshotState.fromSnapshot(transportSnapshot);
+            lastTerrainState = TerrainSnapshotState.fromSnapshot(sentTerrainSnapshot);
+            lastWindowKey = sentTerrainSnapshot.windowKey();
         }
 
-        sendPendingTextures(transportBundle.snapshot(), transportBundle.objectModelDefinitions());
+        if (shouldSendObjects)
+        {
+            if (!bridgeClient.sendObjectsSnapshot(config, objectsSnapshot))
+            {
+                clearState();
+                return;
+            }
+
+            lastObjectsState = objectsState;
+        }
+
+        if (shouldSendActors)
+        {
+            if (!bridgeClient.sendActorsFrame(config, actorsFrame))
+            {
+                clearState();
+                return;
+            }
+
+            lastActorsState = actorsState;
+        }
     }
 
     void clearState()
     {
-        lastSnapshotState = null;
+        lastTerrainState = null;
+        lastObjectsState = null;
+        lastActorsState = null;
+        lastWindowKey = null;
         sentActorModelKeys.clear();
         sentObjectModelKeys.clear();
         sentTextureIds.clear();
@@ -220,28 +300,28 @@ final class SnapshotPublisher
         return true;
     }
 
-    private void sendPendingTextures(SceneSnapshotPayload snapshot, List<ObjectModelDefinitionPayload> objectModels)
+    private boolean sendPendingTextures(SceneSnapshotPayload snapshot, List<ObjectModelDefinitionPayload> objectModels)
     {
         LinkedHashSet<Integer> pendingTextureIds = SnapshotTransportPlanner.collectTextureIds(snapshot, objectModels);
         pendingTextureIds.removeAll(sentTextureIds);
 
         if (pendingTextureIds.isEmpty())
         {
-            return;
+            return true;
         }
 
-        List<TextureDefinitionPayload> definitions = sceneExtractor.extractTextureDefinitions(pendingTextureIds);
+        List<TextureDefinitionPayload> definitions = textureDefinitionResolver.extractTextureDefinitions(pendingTextureIds);
 
         if (definitions.isEmpty())
         {
-            return;
+            return true;
         }
 
         List<List<TextureDefinitionPayload>> batches = SnapshotTransportPlanner.partitionTextureDefinitions(definitions);
 
         if (batches.isEmpty())
         {
-            return;
+            return true;
         }
 
         List<TextureDefinitionPayload> batch = batches.get(0);
@@ -260,13 +340,14 @@ final class SnapshotPublisher
 
         if (!bridgeClient.sendTextureBatch(config, new TextureBatchPayload(batch)))
         {
-            clearState();
-            return;
+            return false;
         }
 
         for (TextureDefinitionPayload definition : batch)
         {
             sentTextureIds.add(definition.id());
         }
+
+        return true;
     }
 }

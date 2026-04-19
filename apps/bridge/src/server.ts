@@ -4,21 +4,31 @@ import {createServer, type Server as HttpServer} from 'node:http';
 import {fileURLToPath} from 'node:url';
 import express from 'express';
 import {
+  createActorsFrameMessage,
   createAckMessage,
   createActorModelBatchMessage,
   createErrorMessage,
   createObjectModelBatchMessage,
+  createObjectsSnapshotMessage,
+  createTerrainSnapshotMessage,
   createTextureBatchMessage,
+  createWindowKey,
   parseProtocolMessage,
+  protocolVersion,
   type AckMessage,
+  type ActorsFrame,
+  type ActorsFrameMessage,
   type ActorModelBatchMessage,
   type ActorModelDefinition,
   type HelloMessage,
   type ObjectModelBatchMessage,
   type ObjectModelDefinition,
+  type ObjectsSnapshot,
+  type ObjectsSnapshotMessage,
   type ProtocolMessage,
-  type SceneSnapshot,
   type SceneSnapshotMessage,
+  type TerrainSnapshot,
+  type TerrainSnapshotMessage,
   type TextureBatchMessage,
   type TextureDefinition,
 } from '@rune-xr/protocol';
@@ -150,14 +160,16 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
   const objectModels = new Map<string, ObjectModelDefinition>();
   const textureDefinitions = new Map<number, TextureDefinition>();
   let pluginSocket: WebSocket | undefined;
-  let latestSnapshot: SceneSnapshot | undefined;
+  let latestTerrainSnapshot: TerrainSnapshot | undefined;
+  let latestObjectsSnapshot: ObjectsSnapshot | undefined;
+  let latestActorsFrame: ActorsFrame | undefined;
 
   app.get('/healthz', (_request, response) => {
     response.json({
       status: 'ok',
       clientCount: clients.size,
       hasPlugin: Boolean(pluginSocket && pluginSocket.readyState === pluginSocket.OPEN),
-      latestTimestamp: latestSnapshot?.timestamp,
+      latestTimestamp: currentLatestTimestamp(latestTerrainSnapshot, latestObjectsSnapshot, latestActorsFrame),
     });
   });
 
@@ -178,11 +190,43 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     });
   }
 
-  const broadcastSnapshot = (snapshot: SceneSnapshot) => {
-    const message: SceneSnapshotMessage = {
-      kind: 'scene_snapshot',
-      snapshot,
-    };
+  const broadcastTerrainSnapshot = (snapshot: TerrainSnapshot) => {
+    const message = createTerrainSnapshotMessage(snapshot);
+
+    if (!latestTerrainSnapshot || latestTerrainSnapshot.windowKey !== snapshot.windowKey) {
+      latestObjectsSnapshot = undefined;
+      latestActorsFrame = undefined;
+    }
+
+    latestTerrainSnapshot = snapshot;
+
+    for (const client of clients) {
+      sendMessage(client, message);
+    }
+  };
+
+  const broadcastObjectsSnapshot = (snapshot: ObjectsSnapshot) => {
+    const message = createObjectsSnapshotMessage(snapshot);
+
+    if (!latestTerrainSnapshot || latestTerrainSnapshot.windowKey !== snapshot.windowKey) {
+      logger.warn(`Ignoring cached objects snapshot for unmatched windowKey=${snapshot.windowKey}`);
+    } else {
+      latestObjectsSnapshot = snapshot;
+    }
+
+    for (const client of clients) {
+      sendMessage(client, message);
+    }
+  };
+
+  const broadcastActorsFrame = (frame: ActorsFrame) => {
+    const message = createActorsFrameMessage(frame);
+
+    if (!latestTerrainSnapshot || latestTerrainSnapshot.windowKey !== frame.windowKey) {
+      logger.warn(`Ignoring cached actors frame for unmatched windowKey=${frame.windowKey}`);
+    } else {
+      latestActorsFrame = frame;
+    }
 
     for (const client of clients) {
       sendMessage(client, message);
@@ -215,6 +259,30 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     for (const batch of partitionObjectModels([...objectModels.values()])) {
       sendMessage(socket, createObjectModelBatchMessage(batch));
     }
+  };
+
+  const sendTerrainReplay = (socket: WebSocket) => {
+    if (!latestTerrainSnapshot) {
+      return;
+    }
+
+    sendMessage(socket, createTerrainSnapshotMessage(latestTerrainSnapshot));
+  };
+
+  const sendObjectsReplay = (socket: WebSocket) => {
+    if (!latestTerrainSnapshot || !latestObjectsSnapshot || latestObjectsSnapshot.windowKey !== latestTerrainSnapshot.windowKey) {
+      return;
+    }
+
+    sendMessage(socket, createObjectsSnapshotMessage(latestObjectsSnapshot));
+  };
+
+  const sendActorsReplay = (socket: WebSocket) => {
+    if (!latestTerrainSnapshot || !latestActorsFrame || latestActorsFrame.windowKey !== latestTerrainSnapshot.windowKey) {
+      return;
+    }
+
+    sendMessage(socket, createActorsFrameMessage(latestActorsFrame));
   };
 
   const broadcastTextureBatch = (textures: TextureDefinition[]) => {
@@ -305,16 +373,9 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
     sendActorModelReplay(socket);
     sendObjectModelReplay(socket);
     sendTextureReplay(socket);
-    if (latestSnapshot) {
-      broadcastToSocket(socket, latestSnapshot);
-    }
-  };
-
-  const broadcastToSocket = (socket: WebSocket, snapshot: SceneSnapshot) => {
-    sendMessage(socket, {
-      kind: 'scene_snapshot',
-      snapshot,
-    });
+    sendTerrainReplay(socket);
+    sendObjectsReplay(socket);
+    sendActorsReplay(socket);
   };
 
   const cleanupSocket = (socket: WebSocket) => {
@@ -399,7 +460,7 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
       }
 
       if (state.role !== 'plugin') {
-        sendError(socket, 'forbidden', 'Only the plugin connection may publish scene snapshots.');
+        sendError(socket, 'forbidden', 'Only the plugin connection may publish scene data.');
         return;
       }
 
@@ -424,10 +485,55 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
         return;
       }
 
-      const sceneMessage: SceneSnapshotMessage = message;
+      if (message.kind === 'terrain_snapshot') {
+        const terrainMessage: TerrainSnapshotMessage = message;
 
-      latestSnapshot = sceneMessage.snapshot;
-      broadcastSnapshot(sceneMessage.snapshot);
+        broadcastTerrainSnapshot(terrainMessage);
+        return;
+      }
+
+      if (message.kind === 'objects_snapshot') {
+        const objectsMessage: ObjectsSnapshotMessage = message;
+
+        broadcastObjectsSnapshot(objectsMessage);
+        return;
+      }
+
+      if (message.kind === 'actors_frame') {
+        const actorsMessage: ActorsFrameMessage = message;
+
+        broadcastActorsFrame(actorsMessage);
+        return;
+      }
+
+      const sceneMessage: SceneSnapshotMessage = message;
+      const windowKey = createWindowKey(
+        sceneMessage.snapshot.plane,
+        sceneMessage.snapshot.baseX,
+        sceneMessage.snapshot.baseY,
+      );
+
+      broadcastTerrainSnapshot({
+        version: protocolVersion,
+        timestamp: sceneMessage.snapshot.timestamp,
+        windowKey,
+        baseX: sceneMessage.snapshot.baseX,
+        baseY: sceneMessage.snapshot.baseY,
+        plane: sceneMessage.snapshot.plane,
+        tiles: sceneMessage.snapshot.tiles,
+      });
+      broadcastObjectsSnapshot({
+        version: protocolVersion,
+        timestamp: sceneMessage.snapshot.timestamp,
+        windowKey,
+        objects: sceneMessage.snapshot.objects,
+      });
+      broadcastActorsFrame({
+        version: protocolVersion,
+        timestamp: sceneMessage.snapshot.timestamp,
+        windowKey,
+        actors: sceneMessage.snapshot.actors,
+      });
     });
 
     socket.on('close', (code, reason) => {
@@ -447,10 +553,12 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
       port: boundPort,
     },
     getState() {
+      const latestTimestamp = currentLatestTimestamp(latestTerrainSnapshot, latestObjectsSnapshot, latestActorsFrame);
+
       return {
         clientCount: clients.size,
         hasPlugin: Boolean(pluginSocket && pluginSocket.readyState === pluginSocket.OPEN),
-        ...(latestSnapshot ? {latestTimestamp: latestSnapshot.timestamp} : {}),
+        ...(latestTimestamp === undefined ? {} : {latestTimestamp}),
       };
     },
     async stop() {
@@ -521,6 +629,20 @@ function estimateObjectModelDefinitionChars(model: ObjectModelDefinition) {
 
 function estimateActorModelDefinitionChars(model: ActorModelDefinition) {
   return JSON.stringify(model).length + 64;
+}
+
+function currentLatestTimestamp(
+  terrainSnapshot?: TerrainSnapshot,
+  objectsSnapshot?: ObjectsSnapshot,
+  actorsFrame?: ActorsFrame,
+) {
+  const latestTimestamp = Math.max(
+    terrainSnapshot?.timestamp ?? 0,
+    objectsSnapshot?.timestamp ?? 0,
+    actorsFrame?.timestamp ?? 0,
+  );
+
+  return latestTimestamp > 0 ? latestTimestamp : undefined;
 }
 
 async function listen(server: HttpServer, port: number, host: string) {

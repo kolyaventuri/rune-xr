@@ -3,10 +3,13 @@ package dev.rune.xr.runelite;
 import com.google.gson.Gson;
 import dev.rune.xr.runelite.model.ActorModelDefinitionPayload;
 import dev.rune.xr.runelite.model.ActorPayload;
+import dev.rune.xr.runelite.model.ActorsFramePayload;
 import dev.rune.xr.runelite.model.ObjectModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ObjectsSnapshotPayload;
 import dev.rune.xr.runelite.model.SceneObjectPayload;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
 import dev.rune.xr.runelite.model.TextureDefinitionPayload;
+import dev.rune.xr.runelite.model.TerrainSnapshotPayload;
 import dev.rune.xr.runelite.model.TileSurfaceModelPayload;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -157,6 +160,64 @@ final class SnapshotTransportPlanner
         }
 
         return textureIds;
+    }
+
+    static String windowKey(int plane, int baseX, int baseY)
+    {
+        return plane + ":" + baseX + ":" + baseY;
+    }
+
+    static String windowKey(SceneSnapshotPayload snapshot)
+    {
+        return windowKey(snapshot.plane(), snapshot.baseX(), snapshot.baseY());
+    }
+
+    static TerrainSnapshotPayload terrainSnapshot(SceneSnapshotPayload snapshot)
+    {
+        return terrainSnapshot(snapshot, windowKey(snapshot));
+    }
+
+    static TerrainSnapshotPayload terrainSnapshot(SceneSnapshotPayload snapshot, String windowKey)
+    {
+        return new TerrainSnapshotPayload(
+            snapshot.version(),
+            snapshot.timestamp(),
+            windowKey,
+            snapshot.baseX(),
+            snapshot.baseY(),
+            snapshot.plane(),
+            snapshot.tiles()
+        );
+    }
+
+    static ObjectsSnapshotPayload objectsSnapshot(SceneSnapshotPayload snapshot)
+    {
+        return objectsSnapshot(snapshot, windowKey(snapshot));
+    }
+
+    static ObjectsSnapshotPayload objectsSnapshot(SceneSnapshotPayload snapshot, String windowKey)
+    {
+        return new ObjectsSnapshotPayload(
+            snapshot.version(),
+            snapshot.timestamp(),
+            windowKey,
+            snapshot.objects()
+        );
+    }
+
+    static ActorsFramePayload actorsFrame(SceneSnapshotPayload snapshot)
+    {
+        return actorsFrame(snapshot, windowKey(snapshot));
+    }
+
+    static ActorsFramePayload actorsFrame(SceneSnapshotPayload snapshot, String windowKey)
+    {
+        return new ActorsFramePayload(
+            snapshot.version(),
+            snapshot.timestamp(),
+            windowKey,
+            snapshot.actors()
+        );
     }
 
     static RuneXrPlugin.SnapshotTransportBundle splitModels(SceneSnapshotPayload snapshot)

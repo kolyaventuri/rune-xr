@@ -3,10 +3,14 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
 import {
+	createActorsFrameMessage,
 	createActorModelBatchMessage,
 	createHelloMessage,
 	createObjectModelBatchMessage,
+	createObjectsSnapshotMessage,
+	createTerrainSnapshotMessage,
 	createTextureBatchMessage,
+	createWindowKey,
 	parseProtocolMessage,
 	parseSceneSnapshot,
 	sampleSceneSnapshot,
@@ -43,6 +47,48 @@ describe('protocol fixtures', () => {
 		]);
 
 		expect(parseProtocolMessage(structuredClone(textureBatch))).toEqual(textureBatch);
+	});
+
+	it('parses terrain snapshot envelopes', () => {
+		const terrainSnapshot = createTerrainSnapshotMessage({
+			version: 2,
+			timestamp: 1_710_000_000_100,
+			windowKey: createWindowKey(0, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY),
+			baseX: sampleSceneSnapshot.baseX,
+			baseY: sampleSceneSnapshot.baseY,
+			plane: sampleSceneSnapshot.plane,
+			tiles: sampleSceneSnapshot.tiles,
+		});
+
+		expect(parseProtocolMessage(structuredClone(terrainSnapshot))).toEqual(terrainSnapshot);
+	});
+
+	it('parses objects snapshot envelopes', () => {
+		const objectsSnapshot = createObjectsSnapshotMessage({
+			version: 2,
+			timestamp: 1_710_000_000_100,
+			windowKey: createWindowKey(0, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY),
+			objects: sampleSceneSnapshot.objects.map(object => ({
+				...object,
+				model: undefined,
+			})),
+		});
+
+		expect(parseProtocolMessage(structuredClone(objectsSnapshot))).toEqual(objectsSnapshot);
+	});
+
+	it('parses actor frame envelopes', () => {
+		const actorsFrame = createActorsFrameMessage({
+			version: 2,
+			timestamp: 1_710_000_000_100,
+			windowKey: createWindowKey(0, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY),
+			actors: sampleSceneSnapshot.actors.map(actor => ({
+				...actor,
+				model: undefined,
+			})),
+		});
+
+		expect(parseProtocolMessage(structuredClone(actorsFrame))).toEqual(actorsFrame);
 	});
 
 	it('parses object model batch envelopes', () => {

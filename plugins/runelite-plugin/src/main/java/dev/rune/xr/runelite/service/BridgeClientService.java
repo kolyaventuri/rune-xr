@@ -4,17 +4,20 @@ import com.google.gson.Gson;
 import dev.rune.xr.runelite.config.RuneXrConfig;
 import dev.rune.xr.runelite.model.ActorModelBatchPayload;
 import dev.rune.xr.runelite.model.ActorModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ActorsFramePayload;
 import dev.rune.xr.runelite.model.ObjectModelBatchPayload;
 import dev.rune.xr.runelite.model.ObjectModelDefinitionPayload;
+import dev.rune.xr.runelite.model.ObjectsSnapshotPayload;
 import dev.rune.xr.runelite.model.ProtocolMessages;
 import dev.rune.xr.runelite.model.SceneSnapshotPayload;
+import dev.rune.xr.runelite.model.TerrainSnapshotPayload;
 import dev.rune.xr.runelite.model.TextureBatchPayload;
 import dev.rune.xr.runelite.model.TextureDefinitionPayload;
 import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public final class BridgeClientService implements AutoCloseable
+public class BridgeClientService implements AutoCloseable
 {
     private static final Logger log = LoggerFactory.getLogger(BridgeClientService.class);
     private static final long MAX_WEBSOCKET_QUEUE_BYTES = 16L * 1024L * 1024L;
@@ -54,6 +57,60 @@ public final class BridgeClientService implements AutoCloseable
             log.debug("Unable to send Rune XR snapshot to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
             socketClient.resetConnection();
             return null;
+        }
+    }
+
+    public synchronized TerrainSnapshotPayload sendTerrainSnapshot(RuneXrConfig config, TerrainSnapshotPayload snapshot)
+    {
+        try
+        {
+            ensureConnected(config);
+            String payload = gson.toJson(ProtocolMessages.TerrainSnapshotMessage.fromSnapshot(snapshot));
+            logTerrainSnapshotSend(snapshot, payload);
+            socketClient.sendMessage("terrain_snapshot", payload);
+            return snapshot;
+        }
+        catch (RuntimeException exception)
+        {
+            log.debug("Unable to send Rune XR terrain snapshot to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
+            socketClient.resetConnection();
+            return null;
+        }
+    }
+
+    public synchronized boolean sendObjectsSnapshot(RuneXrConfig config, ObjectsSnapshotPayload snapshot)
+    {
+        try
+        {
+            ensureConnected(config);
+            String payload = gson.toJson(ProtocolMessages.ObjectsSnapshotMessage.fromSnapshot(snapshot));
+            logObjectsSnapshotSend(snapshot, payload);
+            socketClient.sendMessage("objects_snapshot", payload);
+            return true;
+        }
+        catch (RuntimeException exception)
+        {
+            log.debug("Unable to send Rune XR objects snapshot to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
+            socketClient.resetConnection();
+            return false;
+        }
+    }
+
+    public synchronized boolean sendActorsFrame(RuneXrConfig config, ActorsFramePayload frame)
+    {
+        try
+        {
+            ensureConnected(config);
+            String payload = gson.toJson(ProtocolMessages.ActorsFrameMessage.fromFrame(frame));
+            logActorsFrameSend(frame, payload);
+            socketClient.sendMessage("actors_frame", payload);
+            return true;
+        }
+        catch (RuntimeException exception)
+        {
+            log.debug("Unable to send Rune XR actors frame to {}:{}", config.bridgeHost(), config.bridgePort(), exception);
+            socketClient.resetConnection();
+            return false;
         }
     }
 
@@ -238,6 +295,87 @@ public final class BridgeClientService implements AutoCloseable
                 MAX_WEBSOCKET_QUEUE_BYTES,
                 textures.textures().size(),
                 pngChars
+            );
+        }
+    }
+
+    private void logTerrainSnapshotSend(TerrainSnapshotPayload snapshot, String payload)
+    {
+        long payloadBytes = utf8Bytes(payload);
+
+        if (payloadBytes > MAX_SNAPSHOT_PAYLOAD_BYTES / 2L)
+        {
+            log.debug(
+                "Rune XR terrain snapshot payload is large (bytes={}, queueLimit={}, tiles={}, windowKey={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                snapshot.tiles().size(),
+                snapshot.windowKey()
+            );
+        }
+
+        if (payloadBytes > MAX_WEBSOCKET_QUEUE_BYTES)
+        {
+            log.warn(
+                "Rune XR terrain snapshot payload exceeds OkHttp websocket queue limit (bytes={}, queueLimit={}, tiles={}, windowKey={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                snapshot.tiles().size(),
+                snapshot.windowKey()
+            );
+        }
+    }
+
+    private void logObjectsSnapshotSend(ObjectsSnapshotPayload snapshot, String payload)
+    {
+        long payloadBytes = utf8Bytes(payload);
+
+        if (payloadBytes > MAX_SNAPSHOT_PAYLOAD_BYTES / 2L)
+        {
+            log.debug(
+                "Rune XR objects snapshot payload is large (bytes={}, queueLimit={}, objects={}, windowKey={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                snapshot.objects().size(),
+                snapshot.windowKey()
+            );
+        }
+
+        if (payloadBytes > MAX_WEBSOCKET_QUEUE_BYTES)
+        {
+            log.warn(
+                "Rune XR objects snapshot payload exceeds OkHttp websocket queue limit (bytes={}, queueLimit={}, objects={}, windowKey={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                snapshot.objects().size(),
+                snapshot.windowKey()
+            );
+        }
+    }
+
+    private void logActorsFrameSend(ActorsFramePayload frame, String payload)
+    {
+        long payloadBytes = utf8Bytes(payload);
+
+        if (payloadBytes > MAX_SNAPSHOT_PAYLOAD_BYTES / 2L)
+        {
+            log.debug(
+                "Rune XR actors frame payload is large (bytes={}, queueLimit={}, actors={}, windowKey={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                frame.actors().size(),
+                frame.windowKey()
+            );
+        }
+
+        if (payloadBytes > MAX_WEBSOCKET_QUEUE_BYTES)
+        {
+            log.warn(
+                "Rune XR actors frame payload exceeds OkHttp websocket queue limit (bytes={}, queueLimit={}, actors={}, windowKey={})",
+                payloadBytes,
+                MAX_WEBSOCKET_QUEUE_BYTES,
+                frame.actors().size(),
+                frame.windowKey()
             );
         }
     }

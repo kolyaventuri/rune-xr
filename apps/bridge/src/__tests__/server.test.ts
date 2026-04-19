@@ -1,15 +1,22 @@
 import net from 'node:net';
 import {afterEach, describe, expect, it} from 'vitest';
 import {
+  createActorsFrameMessage,
   createActorModelBatchMessage,
   createHelloMessage,
   createObjectModelBatchMessage,
+  createObjectsSnapshotMessage,
+  createTerrainSnapshotMessage,
   createTextureBatchMessage,
+  createWindowKey,
+  protocolVersion,
   sampleSceneSnapshot,
   type ActorModelBatchMessage,
+  type ActorsFrameMessage,
   type ObjectModelBatchMessage,
+  type ObjectsSnapshotMessage,
   type ProtocolMessage,
-  type SceneSnapshotMessage,
+  type TerrainSnapshotMessage,
 } from '@rune-xr/protocol';
 import {WebSocket} from 'ws';
 import {startBridgeServer, type BridgeServerHandle} from '../server.js';
@@ -33,7 +40,7 @@ afterEach(async () => {
 });
 
 describe('bridge server', () => {
-  it('broadcasts snapshots and replays the latest snapshot to new clients', async () => {
+  it('broadcasts scene domains and replays the latest state to new clients', async () => {
     const bridge = await startBridgeServer({host: '127.0.0.1', port: 0});
     handles.push(bridge);
 
@@ -105,52 +112,83 @@ describe('bridge server', () => {
       },
     ]);
 
-    const sceneMessage: SceneSnapshotMessage = {
-      kind: 'scene_snapshot',
-      snapshot: {
-        ...sampleSceneSnapshot,
-        timestamp: Date.now(),
-        objects: sampleSceneSnapshot.objects.map(object => object.id === 'wall_house_sw'
-          ? {
-            ...object,
-            modelKey: 'object-model:wall',
-          }
-          : object),
-        actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
-          ? {
-            ...actor,
-            modelKey: 'actor-model:player',
-            model: undefined,
-          }
-          : actor),
-      },
-    };
+    const windowKey = createWindowKey(
+      sampleSceneSnapshot.plane,
+      sampleSceneSnapshot.baseX,
+      sampleSceneSnapshot.baseY,
+    );
+    const objects = sampleSceneSnapshot.objects.map(object => object.id === 'wall_house_sw'
+      ? {
+        ...object,
+        modelKey: 'object-model:wall',
+        model: undefined,
+      }
+      : object);
+    const actors = sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+      ? {
+        ...actor,
+        modelKey: 'actor-model:player',
+        model: undefined,
+      }
+      : actor);
+    const terrainMessage: TerrainSnapshotMessage = createTerrainSnapshotMessage({
+      version: protocolVersion,
+      timestamp: Date.now(),
+      windowKey,
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles,
+    });
+    const objectsMessage: ObjectsSnapshotMessage = createObjectsSnapshotMessage({
+      version: protocolVersion,
+      timestamp: terrainMessage.timestamp,
+      windowKey,
+      objects,
+    });
+    const actorsMessage: ActorsFrameMessage = createActorsFrameMessage({
+      version: protocolVersion,
+      timestamp: terrainMessage.timestamp,
+      windowKey,
+      actors,
+    });
 
     plugin.socket.send(JSON.stringify(actorModelMessage));
     plugin.socket.send(JSON.stringify(objectModelMessage));
     plugin.socket.send(JSON.stringify(textureMessage));
-    plugin.socket.send(JSON.stringify(sceneMessage));
+    plugin.socket.send(JSON.stringify(terrainMessage));
+    plugin.socket.send(JSON.stringify(objectsMessage));
+    plugin.socket.send(JSON.stringify(actorsMessage));
 
     expect(await client.waitForKind('actor_model_batch')).toEqual(actorModelMessage);
     expect(await client.waitForKind('object_model_batch')).toEqual(objectModelMessage);
     expect(await client.waitForKind('texture_batch')).toEqual(textureMessage);
-    const received = await client.waitForKind('scene_snapshot');
-    expect(received).toEqual(sceneMessage);
+    expect(await client.waitForKind('terrain_snapshot')).toEqual(terrainMessage);
+    expect(await client.waitForKind('objects_snapshot')).toEqual(objectsMessage);
+    expect(await client.waitForKind('actors_frame')).toEqual(actorsMessage);
 
     laterClient.socket.send(JSON.stringify(createHelloMessage('client', 'late-client')));
     await laterClient.waitForKind('ack');
     expect(await laterClient.waitForKind('actor_model_batch')).toEqual(actorModelMessage);
     expect(await laterClient.waitForKind('object_model_batch')).toEqual(objectModelMessage);
     expect(await laterClient.waitForKind('texture_batch')).toEqual(textureMessage);
-    expect(await laterClient.waitForKind('scene_snapshot')).toEqual(sceneMessage);
+    expect(await laterClient.waitForKind('terrain_snapshot')).toEqual(terrainMessage);
+    expect(await laterClient.waitForKind('objects_snapshot')).toEqual(objectsMessage);
+    expect(await laterClient.waitForKind('actors_frame')).toEqual(actorsMessage);
     expect(laterClient.receivedKinds().indexOf('actor_model_batch')).toBeLessThan(
-      laterClient.receivedKinds().indexOf('scene_snapshot'),
+      laterClient.receivedKinds().indexOf('terrain_snapshot'),
     );
     expect(laterClient.receivedKinds().indexOf('object_model_batch')).toBeLessThan(
-      laterClient.receivedKinds().indexOf('scene_snapshot'),
+      laterClient.receivedKinds().indexOf('terrain_snapshot'),
     );
     expect(laterClient.receivedKinds().indexOf('texture_batch')).toBeLessThan(
-      laterClient.receivedKinds().indexOf('scene_snapshot'),
+      laterClient.receivedKinds().indexOf('terrain_snapshot'),
+    );
+    expect(laterClient.receivedKinds().indexOf('terrain_snapshot')).toBeLessThan(
+      laterClient.receivedKinds().indexOf('objects_snapshot'),
+    );
+    expect(laterClient.receivedKinds().indexOf('objects_snapshot')).toBeLessThan(
+      laterClient.receivedKinds().indexOf('actors_frame'),
     );
 
     plugin.socket.close();
@@ -158,7 +196,7 @@ describe('bridge server', () => {
     laterClient.socket.close();
   });
 
-  it('rejects snapshots from non-plugin clients', async () => {
+  it('rejects scene data from non-plugin clients', async () => {
     const bridge = await startBridgeServer({host: '127.0.0.1', port: 0});
     handles.push(bridge);
     const client = trackSocket(await openSocket(bridge.address.port));
@@ -166,16 +204,68 @@ describe('bridge server', () => {
     client.socket.send(JSON.stringify(createHelloMessage('client', 'vitest-client')));
     await client.waitForKind('ack');
 
-    client.socket.send(JSON.stringify({
-      kind: 'scene_snapshot',
-      snapshot: sampleSceneSnapshot,
-    } satisfies SceneSnapshotMessage));
+    client.socket.send(JSON.stringify(createTerrainSnapshotMessage({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey: createWindowKey(sampleSceneSnapshot.plane, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY),
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles,
+    })));
 
     const error = await client.waitForKind('error');
 
     expect(error.kind).toBe('error');
     expect(error.code).toBe('forbidden');
     client.socket.close();
+  });
+
+  it('replays only the latest cached domain state', async () => {
+    const bridge = await startBridgeServer({host: '127.0.0.1', port: 0});
+    handles.push(bridge);
+
+    const plugin = trackSocket(await openSocket(bridge.address.port));
+    const lateClient = trackSocket(await openSocket(bridge.address.port));
+    plugin.socket.send(JSON.stringify(createHelloMessage('plugin', 'vitest-plugin')));
+    await plugin.waitForKind('ack');
+
+    const windowKey = createWindowKey(sampleSceneSnapshot.plane, sampleSceneSnapshot.baseX, sampleSceneSnapshot.baseY);
+    const terrainMessage = createTerrainSnapshotMessage({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      baseX: sampleSceneSnapshot.baseX,
+      baseY: sampleSceneSnapshot.baseY,
+      plane: sampleSceneSnapshot.plane,
+      tiles: sampleSceneSnapshot.tiles,
+    });
+    const firstActors = createActorsFrameMessage({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp,
+      windowKey,
+      actors: sampleSceneSnapshot.actors,
+    });
+    const latestActors = createActorsFrameMessage({
+      version: protocolVersion,
+      timestamp: sampleSceneSnapshot.timestamp + 1,
+      windowKey,
+      actors: sampleSceneSnapshot.actors.map(actor => actor.id === 'self_kolya'
+        ? {...actor, preciseX: actor.x + 0.75}
+        : actor),
+    });
+
+    plugin.socket.send(JSON.stringify(terrainMessage));
+    plugin.socket.send(JSON.stringify(firstActors));
+    plugin.socket.send(JSON.stringify(latestActors));
+
+    lateClient.socket.send(JSON.stringify(createHelloMessage('client', 'late-client')));
+    await lateClient.waitForKind('ack');
+    expect(await lateClient.waitForKind('terrain_snapshot')).toEqual(terrainMessage);
+    expect(await lateClient.waitForKind('actors_frame')).toEqual(latestActors);
+
+    plugin.socket.close();
+    lateClient.socket.close();
   });
 
   it('reports bridge health over http', async () => {
